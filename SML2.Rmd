@@ -1,0 +1,876 @@
+---
+title: "Statistical Machine Learning"
+author: "Joseph Forson"
+date: "2025-12-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,warning=FALSE, message=FALSE)
+```
+
+# Task 1
+
+[Click here for a video summary](https://youtu.be/rsSzXyZlePY)
+
+### 1.1 Shape of the Prostate cancer dataset
+
+```{r data-dimensions,results='hide'}
+library(class)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+
+# Load dataset
+prostate <- read.csv("prostate-cancer-1.csv")
+
+# Dimensions 
+dim(prostate)
+
+# Structure
+str(prostate)
+```
+
+**Insights**
+
+The prostate cancer dataset has \( n = 79 \) observations and
+\( p = 500 \) predictor variables corresponding to the gene
+measurements, also there is a binary response variable \( Y \).
+The dimensionality of the input space is larger than
+the sample size, which is what we call high-dimensional (\( p \gg n \)).
+ 
+::: {style="height: 2em;"}
+::: 
+
+### 1.2 Nature of the input space
+
+From a statistical perspective, the input space is high-dimensional and continuous numeric variables that are gene expression measurements. Each predictor represents the measured expression level of a specific gene, recorded on a common quantitative
+scale across samples.The input space is also homogeneous.  
+
+::: {style="height: 2em;"}
+::: 
+
+### 1.3 Distribution of the response variable
+
+```{r response-distribution}
+# Convert response to factor
+prostate$Y <- as.factor(prostate$Y)
+
+# Display class counts
+table(prostate$Y)
+
+# Bar plot
+barplot(
+  table(prostate$Y),
+  col = "lightgray",
+  main = "Distribution of the Response Variable",
+  xlab = "Class",
+  ylab = "Frequency"
+)
+```
+
+**Insights**
+
+The bar plot shows the distribution of the binary response $Y$ in the
+prostate cancer data. The two classes are represented by 37 and 42
+observations respectively, indicating a fairly balanced class
+distribution.
+
+::: {style="height: 2em;"}
+::: 
+
+
+```{r}
+str(prostate$Y)
+```
+
+
+### 1.4 Identifying the most powerful predictors using the Kruskal–Wallis test
+
+```{r kruskal-wallis-ranking}
+
+# Predictor names
+predictor_names <- setdiff(colnames(prostate), "Y")
+
+# data frame
+kw_results <- data.frame(
+  Variable = predictor_names,
+  KW_statistic = NA,
+  p_value = NA
+)
+
+# Loop predictors and Kruskal–Wallis test
+for (j in seq_along(predictor_names)) {
+  x <- prostate[[predictor_names[j]]]
+  kw_test <- kruskal.test(x ~ prostate$Y)
+  kw_results$KW_statistic[j] <- as.numeric(kw_test$statistic)
+  kw_results$p_value[j] <- kw_test$p.value
+}
+
+# Sort predictors by decreasing order
+kw_results_sorted <- kw_results[order(-kw_results$KW_statistic), ]
+
+# Top 9
+head(kw_results_sorted, 9)
+```
+
+
+**Insights**
+
+The predictors were then ranked according to the magnitude of their Kruskal–Wallis test statistic with larger values indicating stronger distributional differences across classes.
+ 
+
+::: {style="height: 2em;"}
+::: 
+### 1.5 Kruskal–Wallis ranking
+```{r kw-h-plot}
+# Kruskal–Wallis statistics sorted 
+kw_stats <- kw_results_sorted$KW_statistic
+
+# Type = "h" plot
+plot(
+  kw_stats,
+  type = "h",
+  lwd = 2,
+  col = "gray40",
+  xlab = "Predictor index (ordered by KW statistic)",
+  ylab = "Kruskal–Wallis test statistic",
+  main = "Kruskal–Wallis Statistics Across Predictors"
+)
+```
+**Insight**
+
+The type = "h" plot shows the Kruskal–Wallis test statistics for all predictor variables but indexed, ordered by increasing magnitude. The plot reveals that the majority of predictors exhibit relatively small test statistics, indicating weak univariate association with the response. 
+
+
+
+```{r kw-reduced-plot, fig.height=4, fig.width=6}
+# Extract KW statistics
+kw_stats <- kw_results_sorted$KW_statistic
+
+# strongest and weakest predictors
+top_k <- 20
+kw_reduced <- c(
+  head(kw_stats, top_k),
+  tail(kw_stats, top_k)
+)
+
+# Plot
+plot(
+  kw_reduced,
+  type = "h",
+  lwd = 2,
+  col = "gray40",
+  xlab = "Selected predictor index",
+  ylab = "Kruskal–Wallis test statistic",
+  main = "Kruskal–Wallis Statistics (Strongest and Weakest Predictors)"
+)
+
+abline(v = top_k + 0.5, lty = 2, col = "red")
+```
+
+::: {style="height: 2em;"}
+::: 
+
+### Comparative boxplots of the 9 Top predictors
+
+```{r top9-boxplots}
+top9_vars <- kw_results_sorted$Variable[1:9]
+
+# plotting layout
+par(mfrow = c(3, 3), mar = c(4, 4, 2, 1))
+
+# Boxplots
+for (var in top9_vars) {
+  boxplot(
+    prostate[[var]] ~ prostate$Y,
+    main = var,
+    xlab = "Response class",
+    ylab = "Expression level",
+    col = c("lightgray", "darkgray")
+  )
+}
+```
+**Insights**
+
+The comparative boxplots illustrate the distribution of the nine top-ranked predictors across the two response classes. For most of these
+variables, there is a  shift in median expression levels between classes, indicating meaningful differences in central tendency that are
+consistent with their large Kruskal–Wallis test statistics.
+
+
+### 1.7 Classification tree
+```{r classification-tree}
+# Fit a classification tree all predictors
+tree_fit <- rpart(
+  Y ~ .,
+  data = prostate,
+  method = "class",
+  cp = 0.01
+)
+
+# Plot classification tree
+rpart.plot(
+  tree_fit,
+  type = 2,
+  extra = 104,
+  main = "Classification Tree for Prostate Cancer Data"
+)
+```
+
+The classification tree fitted with cp = 0.01 has four terminal nodes.
+
+::: {style="height: 2em;"}
+::: 
+
+**Insights**
+
+The first split of the tree occurs on the variable X201290_at at the threshold value 1.1, showing that this predictor achieves the largest reduction in node impurity at the root of the tree.
+This initial split partitions the observations into two groups with markedly different class distributions, demonstrating that X201290_at plays a key role in separating the response classes in a multivariate context. 
+
+::: {style="height: 2em;"}
+::: 
+
+Mathematical form of Region 2 and Region 4,
+
+Region 2
+\[
+X201290\_at \ge 1.1 \quad \text{and} \quad X214008\_at \ge -0.29.
+\]
+
+Region 4 
+\[
+X201290\_at < 1.1 \quad \text{and} \quad X209048\_s\_at \ge -0.063.
+\]
+
+
+::: {style="height: 3em;"}
+::: 
+
+### 1.8 Comparative boxplots of the 9 weakest predictors
+```{r weakest9-boxplots}
+# 9 weakest predictors
+weakest9_vars <- tail(kw_results_sorted$Variable, 9)
+
+# plotting layout
+par(mfrow = c(3, 3), mar = c(4, 4, 2, 1))
+
+# comparative boxplots
+for (var in weakest9_vars) {
+  boxplot(
+    prostate[[var]] ~ prostate$Y,
+    main = var,
+    xlab = "Response class",
+    ylab = "Expression level",
+    col = c("lightgray", "darkgray")
+  )
+}
+```
+
+**Insights**
+
+The comparative boxplots of the nine weakest predictors shows some overlap between the distributions of the two response classes, with little difference in median expression levels. 
+ 
+ 
+::: {style="height: 3em;"}
+::: 
+
+### 1.9 Correlation of the predictor variables
+```{r correlation-plot, fig.height=6, fig.width=6}
+# Extract predictor matrix (exclude response)
+X <- prostate[, setdiff(colnames(prostate), "Y")]
+
+# Compute correlation matrix
+cor_mat <- cor(X)
+
+# Correlation heatmap
+image(
+  cor_mat,
+  col = colorRampPalette(c("blue", "white", "red"))(100),
+  main = "Correlation Structure of Predictor Variables",
+  axes = FALSE
+)
+```
+
+**Insight**
+
+The correlation plot show a  visualization of the dependence structure among the 500 predictor variables. Due to the extremely high
+dimensionality of the input space, individual pairwise correlations are not directly interpretable; instead, the plot is used to assess overall
+patterns of redundancy and structure among the predictors.
+
+
+
+
+
+```{r random-9-predictors}
+set.seed(19671210)
+
+# Extract predictor names
+pred_names <- setdiff(colnames(prostate), "Y")
+
+# Randomly select 9 predictors
+rand9 <- sample(pred_names, 9)
+
+rand9
+```
+ 
+
+```{r heatmap-rand9, fig.height=5, fig.width=5}
+
+X_rand9 <- prostate[, rand9]
+
+# Correlation matrix
+cor_rand9 <- cor(X_rand9)
+
+cor_rand9
+
+image(
+  cor_rand9,
+  col = colorRampPalette(c("blue", "white", "red"))(100),
+  axes = FALSE,
+  main = "Correlation Heatmap of 9 Random Predictors"
+)
+
+ 
+axis(1, at = seq(0, 1, length.out = 9), labels = rand9, las = 2, cex.axis = 0.7)
+axis(2, at = seq(0, 1, length.out = 9), labels = rand9, las = 2, cex.axis = 0.7)
+
+
+axis(4, at = seq(0, 1, length.out = 5),
+     labels = round(seq(-1, 1, length.out = 5), 2),
+     las = 1)
+```
+
+::: {style="height: 3em;"}
+::: 
+
+
+
+
+
+### 1.10 Eigendecomposition of the correlation matrix
+
+```{r eigen-correlation}
+# Predictor matrix  
+X <- prostate[, setdiff(colnames(prostate), "Y")]
+
+# Correlation matrix
+cor_mat <- cor(X)
+
+# Eigenvalues of correlation matrix
+eig <- eigen(cor_mat, symmetric = TRUE, only.values = TRUE)
+lambda <- eig$values
+
+# max and min eigenvalues
+lambda_max <- max(lambda)
+
+
+tol <- 1e-10
+lambda_pos <- lambda[lambda > tol]
+
+ 
+lambda_min <- min(lambda_pos)
+
+# Ratio 
+ratio <- lambda_max / lambda_min
+
+# Print results
+lambda_max
+lambda_min
+ratio
+```
+**Insights**
+The eigendecomposition of the predictor correlation matrix shows that the largest eigenvalue is approximately \( \lambda_{\max} = 327.10 \), while
+the smallest meaningful eigenvalue, after accounting for numerical precision, is approximately \( \lambda_{\min} = 0.369 \). The resulting ratio
+\[
+\lambda_{\max} / \lambda_{\min} \approx 8.87 \times 10^{2}
+\]
+is very large, indicating that the correlation matrix is severely ill-conditioned.
+
+::: {style="height: 3em;"}
+::: 
+
+### 1.11 Building  six learning machines
+```{r data-prep-roc}
+# Scale predictors for kNN
+X_scaled <- scale(X)
+Y <- prostate$Y
+```
+ 
+
+```{r knn-models}
+# 1NN
+knn1 <- knn(X_scaled, X_scaled, Y, k = 1, prob = TRUE)
+prob_knn1 <- ifelse(knn1 == 1, attr(knn1, "prob"), 1 - attr(knn1, "prob"))
+
+# 7NN
+knn7 <- knn(X_scaled, X_scaled, Y, k = 7, prob = TRUE)
+prob_knn7 <- ifelse(knn7 == 1, attr(knn7, "prob"), 1 - attr(knn7, "prob"))
+
+# 9NN
+knn9 <- knn(X_scaled, X_scaled, Y, k = 9, prob = TRUE)
+prob_knn9 <- ifelse(knn9 == 1, attr(knn9, "prob"), 1 - attr(knn9, "prob"))
+
+```
+ 
+ 
+```{r tree-models}
+# cp = 0
+tree0 <- rpart(Y ~ ., data = prostate, control = rpart.control(cp = 0))
+prob_tree0 <- predict(tree0)[, 2]
+
+# cp = 0.05
+tree05 <- rpart(Y ~ ., data = prostate, control = rpart.control(cp = 0.05))
+prob_tree05 <- predict(tree05)[, 2]
+
+# cp = 0.1
+tree1 <- rpart(Y ~ ., data = prostate, control = rpart.control(cp = 0.1))
+prob_tree1 <- predict(tree1)[, 2]
+```
+ 
+
+```{r roc-computation}
+pred_knn1  <- prediction(prob_knn1, Y)
+pred_knn7  <- prediction(prob_knn7, Y)
+pred_knn9  <- prediction(prob_knn9, Y)
+pred_tree0 <- prediction(prob_tree0, Y)
+pred_tree05 <- prediction(prob_tree05, Y)
+pred_tree1 <- prediction(prob_tree1, Y)
+
+roc_knn1  <- performance(pred_knn1, "tpr", "fpr")
+roc_knn7  <- performance(pred_knn7, "tpr", "fpr")
+roc_knn9  <- performance(pred_knn9, "tpr", "fpr")
+roc_tree0 <- performance(pred_tree0, "tpr", "fpr")
+roc_tree05 <- performance(pred_tree05, "tpr", "fpr")
+roc_tree1 <- performance(pred_tree1, "tpr", "fpr")
+```
+
+
+
+```{r roc-plot}
+plot(roc_knn1, col = "black", lwd = 2,
+     main = "Comparative ROC Curves (Training = Test)")
+plot(roc_knn7, col = "blue", lwd = 2, add = TRUE)
+plot(roc_knn9, col = "red", lwd = 2, add = TRUE)
+plot(roc_tree0, col = "green", lwd = 2, add = TRUE)
+plot(roc_tree05, col = "purple", lwd = 2, add = TRUE)
+plot(roc_tree1, col = "orange", lwd = 2, add = TRUE)
+
+legend("bottomright",
+       legend = c("1NN", "7NN", "9NN",
+                  "Tree cp=0", "Tree cp=0.05", "Tree cp=0.1"),
+       col = c("black", "blue", "red",
+               "green", "purple", "orange"),
+       lwd = 2)
+```
+
+ 
+::: {style="height: 2em;"}
+::: 
+### 1.12 Plots of Classification trees grown
+
+```{r plot-tree-cp0, fig.height=6, fig.width=8}
+prp(
+  tree0,
+  type = 2,
+  extra = 104,
+  main = "Classification Tree (cp = 0)"
+)
+```
+
+
+```{r plot-tree-cp005, fig.height=6, fig.width=8}
+prp(
+  tree05,
+  type = 2,
+  extra = 104,
+  main = "Classification Tree (cp = 0.05)"
+)
+```
+
+
+```{r plot-tree-cp01, fig.height=6, fig.width=8}
+prp(
+  tree1,
+  type = 2,
+  extra = 104,
+  main = "Classification Tree (cp = 0.1)"
+)
+```
+
+### 1.13 Comment on ROC curves
+
+**Insights**
+ Among the kNN classifiers, 1NN shows the best ROC curve, telling its ability to closely fit the training data, while performance decreases as the number of neighbors increases to 7NN and 9NN due to increased smoothing. Similarly, the unpruned classification tree (cp = 0) attains very high apparent performance, with pruning (cp = 0.1) leading to progressively reduced ROC performance.
+ 
+ From a theoretical perspective, this outcome is expected because the same data are used for both training and testing. Flexible methods such as nearest-neighbor classifiers with small \(k\) and unpruned trees have low bias but high variance and are able to closely fit the training data, resulting in overly optimistic ROC curves. Less flexible models, such as kNN with larger \(k\) and more heavily pruned trees, exhibit reduced apparent performance due to increased smoothing
+
+::: {style="height: 2em;"}
+::: 
+
+### 1.14 Plots and Anova
+```{r setup-holdout}
+set.seed(19671210)
+
+S <- 100        # number of replications
+n <- nrow(prostate)
+
+# Store test errors
+err_mat <- matrix(NA, nrow = S, ncol = 6)
+colnames(err_mat) <- c("1NN", "7NN", "9NN",
+                       "Tree_cp0", "Tree_cp0.05", "Tree_cp0.1")
+```
+
+
+```{r stochastic-holdout}
+for (s in 1:S) {
+  
+  # Random split
+  idx_train <- sample(1:n, size = floor(0.7 * n))
+  idx_test  <- setdiff(1:n, idx_train)
+  
+  Xtr  <- X[idx_train, ]
+  Xte  <- X[idx_test, ]
+  Ytr  <- Y[idx_train]
+  Yte  <- Y[idx_test]
+  
+  Xtr_s <- X_scaled[idx_train, ]
+  Xte_s <- X_scaled[idx_test, ]
+  
+  # ---- kNN ----
+  pred_1nn <- knn(Xtr_s, Xte_s, Ytr, k = 1)
+  pred_7nn <- knn(Xtr_s, Xte_s, Ytr, k = 7)
+  pred_9nn <- knn(Xtr_s, Xte_s, Ytr, k = 9)
+  
+  err_mat[s, "1NN"] <- mean(pred_1nn != Yte)
+  err_mat[s, "7NN"] <- mean(pred_7nn != Yte)
+  err_mat[s, "9NN"] <- mean(pred_9nn != Yte)
+  
+  # ---- Trees ----
+  tree0  <- rpart(Y ~ ., data = prostate[idx_train, ],
+                  control = rpart.control(cp = 0))
+  tree05 <- rpart(Y ~ ., data = prostate[idx_train, ],
+                  control = rpart.control(cp = 0.05))
+  tree1  <- rpart(Y ~ ., data = prostate[idx_train, ],
+                  control = rpart.control(cp = 0.1))
+  
+  pred_t0  <- predict(tree0,  prostate[idx_test, ], type = "class")
+  pred_t05 <- predict(tree05, prostate[idx_test, ], type = "class")
+  pred_t1  <- predict(tree1,  prostate[idx_test, ], type = "class")
+  
+  err_mat[s, "Tree_cp0"]    <- mean(pred_t0  != Yte)
+  err_mat[s, "Tree_cp0.05"] <- mean(pred_t05 != Yte)
+  err_mat[s, "Tree_cp0.1"]  <- mean(pred_t1  != Yte)
+}
+```
+
+ 
+```{r boxplots-test-error}
+boxplot(err_mat,
+        main = "Test Error Distributions (S = 100, 70/30 Holdout)",
+        ylab = "Test classification error",
+        col = "lightgray",
+        las = 2)
+```
+**Insight (Test Error Distributions)**
+
+This boxplots display the distribution of the test classification error over the stochastic 70/30 holdout replications for six learning machines. Across models, the median of the test errors are similar, with all methods exhibiting substantial overlap in their error distributions. Highly flexible methods such as 1NN show slightly greater variability in test error, KNN with larger of \(k\) and more heavily pruned trees tend to produce somewhat more stable error distributions.
+
+Overall, no single learning machine consistently dominates the others in terms of test error. The similarity of the distributions suggests that,
+once evaluated on independent test data, differences in model complexity do not translate into large differences in predictive performance for this dataset.
+
+```{r anova-prep}
+err_df <- data.frame(
+  error = as.vector(err_mat),
+  model = factor(rep(colnames(err_mat), each = S))
+)
+```
+
+```{r anova-test-error}
+anova_fit <- aov(error ~ model, data = err_df)
+summary(anova_fit)
+```
+
+**Insight (ANOVA)**
+
+The ANOVA yields an F-statistic of 1.638 with a p-value of 0.148, saying that the null hypothesis of equal mean test error across models cannot be rejected at conventional significance levels.
+
+This result suggests that, despite differences in model flexibility, the average generalization performance of the learning machines is not statistically distinguishable for this dataset. The observed variability in test error is therefore largely attributable to sampling variability in the stochastic holdout procedure rather than systematic differences in model complexity.
+
+
+::: {style="height: 4em;"}
+::: 
+
+### 1.15 General Insight
+
+One key lesson learnt from this exploration is that, high dimensionals can be misleading in predictive performance unless evaluated carefully.
+
+- Initial analyses, such as univariate screening and ROC curves evaluated  on the training data, revealed strong discriminatory power for several  learning machines.
+- However, these results were shown to be overly optimistic once proper  generalization assessment was introduced through stochastic holdout  evaluation.
+
+The data showed key characteristics that actually influenced learning
+behavior due to,
+
+- a large number of predictors relative to the sample size,
+- correlation and redundancy among predictors,
+- and severe ill-conditioning of the correlation matrix.
+
+As a result, many predictors carry overlapping information,
+allowing highly flexible models to overfit the training data without
+achieving superior performance on independent test sets. 
+
+Anothre important observation is that, if we increase model complexity, it doesn't necessarily improve generalization performance. While flexible methods like small \(k\) nearest neighbors and unpruned trees adapt closely to the training data, they tend to show high variability in test error. Regularised methods  give comparable average performance with greater stability illustrating the bias variance tradeoff.
+ 
+Overall, this exploration shows that reliable conclusions in statistical learning machines depend more on appropriate resampling or holdout based evaluation rather than training set performance alone. So in high dimensional, principled evaluations and careful interpretation are as important as the choice of learning itself. 
+
+::: {style="height: 6em;"}
+::: 
+
+# Task 2
+
+### Task  2.1
+
+The binary classification problem of labels \( Y \in \{-1, +1\} \). The k–nearest neighbors classifier is 
+
+\[
+\hat f_{kNN}(x)
+=
+\operatorname{sign}\!\left(
+\sum_{i=1}^n y_i \alpha_i K(x, x_i)
+\right),
+\]
+
+where \( y_i \) is the class label of observation \( x_i \),
+ indicator \( \alpha_i = 1(x_i \in V_k(x)) \) choose the
+\( k \) nearest neighbors of \( x \), and similarity
+kernel   \( K(x,x_i) \)  assigns larger weights to observations that are closer to \( x \).
+
+The quantity
+\[
+\sum_{i=1}^n y_i \alpha_i K(x, x_i)
+\]
+computes a similarity weighted average of the class labels among the
+\( k \) nearest neighbors of \( x \). Observations that are closer to
+\( x \) contribute more strongly to the sum through larger kernel
+weights, while the distant observations contribute little.
+
+If the weighted contribution of neighbors with label \( +1 \) exceeds
+that of neighbors with label \( -1 \), the sum is positive; if the
+opposite is true, the sum is negative. Taking the sign of this quantity
+ assigns \( x \) to the class with the dominant weighted
+presence in its neighborhood.
+
+Hence, \( \hat f_{kNN}(x) \)  computes the predicted label of
+\( x \) by performing a similarity weighted majority vote among its
+\( k \) nearest neighbors.
+
+::: {style="height: 3em;"}
+:::
+
+
+
+
+
+
+### Task  2.2
+
+\[
+\hat\pi(x)
+=
+\sum_{i=1}^n 1(y_i = 1)\,\alpha_i K(x, x_i)
+\]
+estimates  posterior probability
+\[
+P(Y = 1 \mid X = x).
+\]
+
+The indicator \(1(y_i = 1)\) selects observations belonging to
+class \(+1\), the factor \(\alpha_i\) restricts the sum to the \(k\)
+nearest neighbors of \(x\) and the kernel \(K(x,x_i)\) assigns
+similarity-based weights to those neighbors. As a result,
+\(\hat\pi(x)\) represents a weighted proportion of class \(+1\)
+observations in the local neighborhood of \(x\), where closer points
+contributing more strongly.
+
+Hence, \(\hat\pi(x)\) is a local, kernel-weighted estimator of the
+conditional class probability \(P(Y=1 \mid X=x)\).
+
+::: {style="height: 3em;"}
+:::
+
+
+### Task 2.3
+
+In Task 2.2, \(\hat\pi(x)\) estimates the posterior probability
+\(P(Y=1 \mid X=x)\). The classifier
+\[
+\hat g_{kNN}(x) = 2\,1\!\left(\hat\pi(x) > \tfrac12\right) - 1
+\]
+assigns class \(+1\) when this estimated probability exceeds \(1/2\),
+and class \(-1\) otherwise.
+
+The classifier
+\[
+\hat f_{kNN}(x)
+=
+\operatorname{sign}\!\left(
+\sum_{i=1}^n y_i \alpha_i K(x,x_i)
+\right)
+\]
+assigns a label according to the sign of a similarity–weighted sum of
+neighboring labels. This sum is positive   when the weighted
+contribution of class \(+1\) neighbors exceeds that of class \(-1\)
+neighbors, which is same as \(\hat\pi(x) > 1/2\).
+
+Hence, \(\hat f_{kNN}(x)\) and \(\hat g_{kNN}(x)\) define the same
+classification rule.
+
+::: {style="height: 3em;"}
+:::
+
+
+### Task 2.4
+
+The functions \( f \in \mathcal H \) are of the form
+\[
+f(x) = 1\!\left(\hat\pi(x) > \tfrac12\right),
+\]
+which returns  \(0\) or \(1\) for any \(x \in \mathcal X\).
+Therefore, in this formulation the output space is
+\[
+\mathcal Y = \{0, 1\}.
+\]
+
+This corresponds to a binary classification problem where class
+membership is encoded with indicator values.
+
+::: {style="height: 3em;"}
+:::
+
+### Task 2.5
+
+A similar hypothesis space   based on
+estimated posterior probabilities, for example, in logistic regression
+we have functions of the form
+\[
+\mathcal H_{\text{logit}}
+=
+\left\{
+f : \mathcal X \to \{0,1\}
+\;\middle|\;
+f(x) = 1\!\left(\hat p(x) > \tfrac12\right)
+\right\},
+\]
+where \(\hat p(x)\) is an estimate of \(P(Y=1 \mid X=x)\).
+
+As in the kNN case, classification is obtained by first estimating a
+conditional probability and then assigning a label by thresholding this
+estimate at \(1/2\).
+
+::: {style="height: 5em;"}
+:::
+
+# Last Task 
+ 
+Let \(\mathcal D=\{Z_1,\dots,Z_n\}\) with \(Z_i=(X_i,Y_i)\) i.i.d., and  the
+random split be \(\mathcal D=\mathcal D_{\mathrm{TR}}\cup \mathcal D_{\mathrm{TE}}\)
+where \(m:=|\mathcal D_{\mathrm{TR}}|\) and \(s:=|\mathcal D_{\mathrm{TE}}|\).
+
+For  \(f\in\mathcal H\),  
+\[
+\widehat R_{\mathrm{TR}}(f)
+=
+\frac{1}{m}\sum_{i=1}^n \ell\!\big(Y_i,f(X_i)\big)\,\mathbf 1(Z_i\in\mathcal D_{\mathrm{TR}}),
+\qquad
+\widehat R_{\mathrm{TE}}(f)
+=
+\frac{1}{s}\sum_{i=1}^n \ell\!\big(Y_i,f(X_i)\big)\,\mathbf 1(Z_i\in\mathcal D_{\mathrm{TE}}).
+\]
+
+\[
+\hat f=\arg\inf_{f\in\mathcal H}\widehat R_{\mathrm{TR}}(f),
+\qquad
+\tilde f=\arg\inf_{f\in\mathcal H}\widehat R_{\mathrm{TE}}(f).
+\]
+We want to prove
+\[
+\mathbb E\!\left(\widehat R_{\mathrm{TR}}(\hat f)\right)
+\le
+\mathbb E\!\left(\widehat R_{\mathrm{TE}}(\hat f)\right).
+\]
+
+::: {style="height: 3em;"}
+::: 
+
+But
+\[
+A:=\widehat R_{\mathrm{TR}}(\hat f),
+\qquad
+B:=\widehat R_{\mathrm{TE}}(\hat f),
+\qquad
+C:=\widehat R_{\mathrm{TE}}(\hat f),
+\qquad
+D:=\widehat R_{\mathrm{TE}}(\tilde f).
+\]
+ 
+
+By definition \(B=C\).
+Hence
+\[
+\mathbb E(B)=\mathbb E(C).
+\]
+
+::: {style="height: 3em;"}
+::: 
+
+
+Note 
+\[
+A=\min_{f\in\mathcal H}\widehat R_{\mathrm{TR}}(f),
+\qquad
+D=\min_{f\in\mathcal H}\widehat R_{\mathrm{TE}}(f).
+\]
+Because the split into \(\mathcal D_{\mathrm{TR}}\) and \(\mathcal D_{\mathrm{TE}}\) is random,
+the pair \((\mathcal D_{\mathrm{TR}},\mathcal D_{\mathrm{TE}})\) is exchangeable.
+Therefore the random variables
+\(\min_{f\in\mathcal H}\widehat R_{\mathrm{TR}}(f)\) and
+\(\min_{f\in\mathcal H}\widehat R_{\mathrm{TE}}(f)\) have the same distribution, and hence
+\[
+\mathbb E(A)=\mathbb E(D).
+\]
+
+::: {style="height: 3em;"}
+::: 
+
+By definition, \(\tilde f\) minimizes the test empirical risk over \(\mathcal H\). Thus \(f\in\mathcal H\),
+\[
+\widehat R_{\mathrm{TE}}(\tilde f)\le \widehat R_{\mathrm{TE}}(f).
+\]
+So taking \(f=\hat f\) gives
+\[
+D=\widehat R_{\mathrm{TE}}(\tilde f)\le \widehat R_{\mathrm{TE}}(\hat f)=B.
+\]
+
+
+\(D\le B\), so \(\mathbb E(D)\le \mathbb E(B)\).
+
+\[
+\mathbb E(A)=\mathbb E(D)\le \mathbb E(B)=\mathbb E(C).
+\]
+Since \(A=\widehat R_{\mathrm{TR}}(\hat f)\) and \(C=\widehat R_{\mathrm{TE}}(\hat f)\), we obtain
+\[
+\mathbb E\!\left(\widehat R_{\mathrm{TR}}(\hat f)\right)
+\le
+\mathbb E\!\left(\widehat R_{\mathrm{TE}}(\hat f)\right),
+\]
+which is what we want.
+
+
+
+
+
+
+
+
+
