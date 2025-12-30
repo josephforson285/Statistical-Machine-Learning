@@ -1,0 +1,2988 @@
+---
+title: "Statistical Machine Learning"
+author: "Joseph Adu-Gyamfi Forson"
+date: "2025-12-06"
+output:
+  pdf_document:
+    toc: false
+  html_document:
+    toc: false
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Task 1
+
+##### Data on "Default of Credit Card Clients" downloaded from [Uc irvine ML repository](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients)
+
+## Problem Chosen: Predicting Credit Card Default Probability in Taiwan
+
+
+## Wheel 1: Problem Formulation and Motivation
+
+For this project, we develop a statistical machine learning system for
+predicting the probability that a credit card client will default on
+their next payment.
+
+Let\
+$Y \in \{0,1\}$\
+indicate whether the client will default next month ($Y=1$) or not
+($Y=0$), given a feature vector\
+$$
+x = (x_1,\ldots,x_{23})^\top \in \mathbb{R}^{23},
+$$ which in summary are demographics, credit limit information,
+historical bill amounts, past payment behaviour, and repayment status
+over six consecutive months in Taiwan.
+
+The task is a **supervised binary classification
+problem**, with the goal of learning a function\
+$$
+f : \mathcal{X} \rightarrow [0,1],
+$$ that maps a client's features to a predicted probability of default,
+$$
+f(x) = \hat{p}(Y=1 \mid X=x).
+$$
+
+From financial risk-management, estimating
+**probabilities** rather than just predicting a binary label is
+essential. Credit institutions require these default probabilities for
+credit allocation, interest rate adjustment, portfolio management, and
+decision-making under uncertainty.
+
+This formulation fits naturally within the supervised learning
+framework, setting the stage for choosing an appropriate hypothesis
+space, defining a loss function for probability estimation, and
+optimizing a risk functional in subsequent wheels.
+
+::: {style="height: 5em;"}
+:::
+
+## Wheel 2: Data Collection and Exploration
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+
+#  Data read
+data <- read_excel("default_of_credit_card_clients.xls", skip = 1)
+
+# Drop the ID col
+data <- data %>%
+  select(-ID)
+
+
+dim(data)
+str(data)
+
+# statistics
+summary(data)
+
+# Missing values
+colSums(is.na(data))
+
+# Rename the column
+colnames(data)[colnames(data) == "default payment next month"] <- "default_payment_next_month"
+
+print("Column Names")
+colnames(data)
+
+
+
+# Class balance check
+prop.table(table(data$default_payment_next_month))
+
+ 
+#head(data)
+
+```
+
+```{r}
+summary(data)
+```
+
+
+### Data Overview
+
+The dataset has 30,000 credit card clients, each described by 23
+features. These features have both continuous variables such as credit
+limit (LIMIT_BAL), age (AGE), bill amounts (e.g., BILL_AMT1 to
+BILL_AMT6), and categorical variables such as marital status (MARRIAGE)
+and education level (EDUCATION). The target variable is
+`default_payment_next_month`, a binary indicator of whether a client
+defaulted on their credit card payment.
+
+### 5Vs Analysis
+
+-   **Volume**: The dataset contains 30,000 records and 23 features.
+-   **Variety**: The features include a mix of continuous data (e.g.,
+    BILL_AMT1–6) and categorical data (e.g., SEX, EDUCATION, MARRIAGE).
+-   **Velocity**: The dataset is static with no time-dependent
+    variables.
+-   **Veracity**: No missing values were found in the dataset.
+-   **Value**: The data offers valuable insights for financial
+    decision-making, particularly in predicting default risk.
+
+### Class Balance
+
+The target variable, `default_payment_next_month`, is imbalanced with
+77.8% of clients classified as non-default (0) and 22.1% classified as
+default (1) of which we will find how to handle that.
+
+```{r}
+#  Balance bar plot
+barplot(table(data$default_payment_next_month), 
+        main = "Class Balance (Default vs Non-Default)", 
+        col = c("red", "green"), 
+        names.arg = c("Non-Default", "Default"), 
+        xlab = "Class", ylab = "Frequency")
+
+```
+
+### Correlation Heatmap of some Key Features
+
+Notable correlations include:
+
+-   **`PAY_0`** and **`PAY_3`** have a **moderate positive correlation**
+    (0.57), which makes sense as repayment status in earlier months
+    should correlate with later months.
+-   **`LIMIT_BAL`** and **`BILL_AMT1`** have a **moderate positive
+    correlation** (0.29), indicating that clients with higher credit
+    limits tend to have little higher bill amounts.
+-   **AGE**: The correlations involving `AGE` are weak, with no strong
+    relationships to other seen financial features.
+
+```{r}
+# Correlation matrix heatmap for selected features
+library(corrplot)
+correlation_matrix <- cor(data[, c("LIMIT_BAL", "BILL_AMT1", "AGE", "PAY_0", "PAY_3")]) 
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         order = "hclust", 
+         addCoef.col = "black", 
+         col = colorRampPalette(c("blue", "white", "red"))(200), 
+         tl.cex = 0.6, 
+         tl.col = "black", 
+         tl.srt = 45, 
+         mar = c(0,0,1,0))
+
+```
+
+**Figure** : Correlation Matrix of some Features\
+
+::: {style="height: 5em;"}
+:::
+
+For a graphical correlation matrix for each 23 features might be too
+large and unclear so by code the correlation matrix was calculated
+pairiwise.
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+# Calc  correlation matrix for numeric features
+correlation_matrix <- cor(data[, sapply(data, is.numeric)])
+
+ 
+print(correlation_matrix)
+ 
+```
+
+### Boxplots of some Features by Default Status
+
+The boxplots below show the distribution of features (`LIMIT_BAL`,
+`AGE`, and `BILL_AMT1`) by the target variable
+`default_payment_next_month`:
+
+-   **Credit Limit (`LIMIT_BAL`)**: The distribution of credit limits
+    shows that **non-default clients** tend to have a **wider spread**
+    in credit limits, with some high outliers.
+-   **Age (`AGE`)**: There is no clear distinction between default and
+    non-default clients based on age, as the boxplots for both groups
+    overlap.
+-   **Bill Amount (`BILL_AMT1`)**: Both default and non-default clients
+    have outliers in their bill amounts.
+
+```{r}
+# Box plots
+par(mfrow = c(1, 3))  
+
+# LIMIT_BAL by Default Status
+boxplot(LIMIT_BAL ~ default_payment_next_month, data = data,
+        main = "Credit Limit by Default Status",
+        xlab = "Default Status", ylab = "Credit Limit",
+        col = c("lightblue", "lightgreen"))
+
+# AGE by Default Status
+boxplot(AGE ~ default_payment_next_month, data = data,
+        main = "Age by Default Status",
+        xlab = "Default Status", ylab = "Age",
+        col = c("lightblue", "lightgreen"))
+
+# BILL_AMT1 by Default Status
+boxplot(BILL_AMT1 ~ default_payment_next_month, data = data,
+        main = "Bill Amount by Default Status",
+        xlab = "Default Status", ylab = "Bill Amount",
+        col = c("lightblue", "lightgreen"))
+
+# Reset 
+par(mfrow = c(1, 1))
+
+```
+
+**Figure 2**: Boxplots of Credit Limit, Age, and Bill Amount by Default
+Status
+
+## Removing columns that correlate with each other Algorithm
+
+Now the columns have reduced from 23 to 16 when threshold is set to
+correlation 0.7
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(caret)
+
+# correlation matrix for numeric features
+correlation_matrix <- cor(data[, sapply(data, is.numeric)])
+
+# threshold  
+threshold <- 0.7
+
+# Highly correlated matrix
+highly_correlated <- findCorrelation(correlation_matrix, cutoff = threshold)
+
+# List the features  
+removed_features <- colnames(correlation_matrix)[highly_correlated]
+print("Removed Features: ")
+print(removed_features)
+
+# Remove   highly correlated  
+data_clean <- data[, -highly_correlated]
+
+ 
+dim(data_clean)
+summary(data_clean)
+ 
+```
+
+#### Feature Scaling and Handling Categorical Variables
+
+In this step, we handled the **categorical variables** and
+**standardized the numerical features** to prepare the dataset for
+modeling.
+
+1.  **Identified Categorical Variables**: We specified the categorical
+    variables in the dataset (`SEX`, `EDUCATION`, `MARRIAGE`, and
+    `default_payment_next_month`) that should **not** be scaled, as they
+    are already encoded as **numeric** values, representing categories
+    rather than continuous data.
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+
+categorical_vars <- c("SEX", "EDUCATION", "MARRIAGE", "default_payment_next_month")
+
+# Separate  numerical features from categorical ones
+data_numeric <- data_clean[, !colnames(data_clean) %in% categorical_vars]  # numerical features
+data_categorical <- data_clean[, colnames(data_clean) %in% categorical_vars]  # Categorical  
+
+# Standardize only the continuous numerical features
+data_scaled <- scale(data_numeric)
+
+# Combine  
+data_clean_scaled <- cbind(data_categorical, data_scaled)
+
+ 
+head(data_clean_scaled)
+
+```
+
+### Outlier Detection and Removal
+
+In this step, we used the **z-score method** to detect **outliers** in
+the dataset. Any data points with a **z-score greater than 3** or less
+than **-3** were considered **outliers** and were subsequently removed.
+
+1.  **Z-Score Calculation**: We calculated the **z-scores** for each
+    numerical feature in the dataset. Z-scores tell us how many
+    **standard deviations** a data point is from the **mean** of the
+    feature. A z-score greater than 3 or less than -3 typically
+    indicates an **outlier**.
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+# Calculate z-scores  
+z_scores <- scale(data_clean_scaled[, sapply(data_clean_scaled, is.numeric)])
+
+# Check for outliers  
+outliers <- which(abs(z_scores) > 3, arr.ind = TRUE)
+
+# View outliers
+#outliers
+nrow(outliers)
+
+```
+
+```{r}
+# Remove outliers 
+data_clean_scaled_no_outliers <- data_clean_scaled[-outliers[, 1], ]
+
+# Check the new dimensions 
+dim(data_clean_scaled_no_outliers)
+
+```
+
+We identified **4023** outliers based on the z-scores. After removing
+the outliers, the dataset was reduced to **26741** rows and 16 features.
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+df_model <- data_clean_scaled_no_outliers
+
+# categorical variables to factors
+df_model$SEX      <- factor(df_model$SEX)
+df_model$EDUCATION <- factor(df_model$EDUCATION)
+df_model$MARRIAGE  <- factor(df_model$MARRIAGE)
+
+# Target variable as factor  
+df_model$default_payment_next_month <- factor(
+  df_model$default_payment_next_month,
+  levels = c(0, 1),
+  labels = c("no_default", "default")
+)
+
+str(df_model)
+
+```
+
+#### Preparing the Modelling Dataset
+
+To move from data exploration (Wheel 2) to model specification (Wheel
+3), we first prepared a dedicated modelling dataset.
+
+-   We started from the cleaned, scaled dataset with outliers removed
+    (`data_clean_scaled_no_outliers`, 26,741 rows and 16 features).
+-   The variables `SEX`, `EDUCATION`, and `MARRIAGE` were recast as
+    **categorical** (`factor`) variables, since their numeric codes
+    represent categories rather than continuous quantities.
+-   The response variable `default_payment_next_month` was encoded as a
+    binary factor with levels *no_default* and *default*.
+
+This   is best for both linear models (logistic
+regression) and tree-based models (random forests and gradient boosting)
+that we consider in Wheel 3.
+ 
+
+```{r}
+set.seed(123)
+
+n <- nrow(df_model)
+train_idx <- sample(seq_len(n), size = 0.8 * n)
+
+train_df <- df_model[train_idx, ]
+test_df  <- df_model[-train_idx, ]
+
+dim(train_df)
+dim(test_df)
+
+
+```
+
+## Wheel 3: Function Space and Model Specification
+
+In this wheel, we define and justify the *function spaces*   from which
+our statistical learning models will be selected. Each model represents a different
+assumption about the underlying relationship between the features and the probability of
+default. The goal is to compare a diverse set of model families ranging from linear to
+highly flexible nonlinear function classes to determine which yields the best predictive
+performance for credit card default prediction.
+
+Our task is binary classification, where the target variable  
+`default_payment_next_month` indicates whether a client defaults (1) or does not default (0).  
+Thus, the function space should yield estimators of the conditional probability  
+\[
+P(Y=1 \mid X=x),
+\]
+ 
+
+Below, we specify the models we will evaluate, together with the mathematical or statistical
+principles guiding each choice.
+
+
+
+### **1. Logistic Regression (Linear Function Space)**
+
+Logistic regression assumes a *linear decision boundary* between defaulting and non-defaulting clients.  
+The model takes the form  
+\[
+f(x) = \sigma(w^\top x + b),
+\quad \sigma(z) = \frac{1}{1 + e^{-z}},
+\]
+where \(f(x)\) represents the estimated probability of default.
+
+ 
+- Provides a strong and interpretable baseline.  
+- Outputs calibrated probabilities, which aligns directly with our problem goal.  
+- Effective when the log-odds of default vary approximately linearly with features.
+
+This model represents a **low-complexity function space**, which helps prevent overfitting and provides useful interpretability for financial risk settings.
+
+
+
+### **2. k-Nearest Neighbours (kNN) (Non-Parametric Function Space)**
+
+kNN defines the prediction at a point \(x\) based on the majority class among its \(k\) closest
+neighbours. Its function space is:
+
+\[
+f(x) = \frac{1}{k} \sum_{i \in N_k(x)} y_i.
+\]
+
+  
+- Makes *no parametric assumptions* about the form of the decision boundary.  
+- Allows the model to adapt to local structures in the data.  
+- Useful as a smooth, geometry-based model for exploring nonlinearity.
+
+kNN belongs to an **infinite-dimensional function space**, making it extremely flexible, though sensitive to scaling and noise.
+
+
+ 
+### **3. Random Forest (Ensemble of Decision Trees)**
+
+A random forest averages predictions from many decorrelated trees built on bootstrap samples:
+
+\[
+f(x) = \frac{1}{B} \sum_{b=1}^B T_b(x).
+\]
+
+ 
+- Reduces the variance of a single tree, improving stability.  
+- Handles complex nonlinear interactions and high-dimensional structure.  
+- Often serves as an industry-standard model in credit risk analytics.
+
+The function space corresponds to an **ensemble of nonlinear learners**, offering strong predictive power.
+
+
+ 
+ 
+This diversity ensures that we explore function spaces with different complexities, 
+biases, and generalization behaviors and will help us in the next subsequent wheels 
+ 
+ 
+ 
+::: {style="height: 3em;"}
+::: 
+
+# Wheel 4: Principle of Learning and Criteria
+
+In this wheel, we describe the **principles that govern how each model learns** and the **criteria** we use to evaluate performance in the credit default prediction task.
+
+Since this is a binary classification setting, models must estimate the conditional probability:
+
+\[
+P(Y = 1 \mid X = x),
+\]
+
+where \(Y = 1\) represents a default event.
+
+We outline the learning principles for each model class and justify why each is suitable for our problem.
+
+
+
+## 1. Logistic Regression (Linear Function Space)
+
+Logistic regression assumes a **linear decision boundary** between defaulting and non-defaulting clients.  
+The model estimates parameters by minimizing the **cross-entropy loss**:
+
+\[
+\ell(w) = -\sum_{i=1}^n \left[ y_i \log(\sigma(w^\top x_i)) + (1 - y_i)\log(1 - \sigma(w^\top x_i)) \right],
+\]
+
+where \(\sigma(z) = \frac{1}{1 + e^{-z}}\).
+
+
+
+## 2. k-Nearest Neighbours (kNN) — Non-Parametric Function Space
+
+kNN predicts based on the majority class of the \(k\) closest neighbours:
+
+\[
+f(x) = \frac{1}{k} \sum_{i \in N_k(x)} y_i.
+\]
+
+The model does **not** learn parameters learning is implicit in the training data.
+
+ 
+
+
+ 
+
+## 3. Random Forest — Ensemble of Decision Trees
+
+A random forest averages predictions from many decorrelated trees:
+
+\[
+f(x) = \frac{1}{B} \sum_{b=1}^B T_b(x).
+\]
+
+Random forests combine **bagging** and **feature randomness**, reducing variance and improving stability.
+
+ 
+
+ 
+ 
+# Evaluation Criteria
+
+Given the **class imbalance** (far fewer defaulters), accuracy alone is misleading.  
+We therefore use metrics that emphasize ranking quality and correctly identifying defaulters.
+
+### **1. ROC–AUC (Primary Criterion)**  
+Threshold-independent measure reflecting model ranking ability.
+
+### **2. Recall (Sensitivity)**  
+Important because failing to detect a defaulter is costly for lenders.
+
+### **3. Precision**  
+Ensures we do not incorrectly classify too many good clients as risky.
+
+ 
+
+This prepares us for **Wheel 5**, where we implement and optimize these algorithms computationally.
+
+
+
+
+ 
+::: {style="height: 3em;"}
+::: 
+
+# Wheel 5: Algorithm and Computational Optimization 
+
+Cross-Validation and Performance Metric
+
+To optimize the learning algorithms, we set up a 5-fold cross-validation scheme.  
+This ensures stable performance estimates while keeping computation manageable for our dataset size.
+
+We use **ROC–AUC** as the primary evaluation metric because,
+- The dataset is **class imbalanced**, with far fewer default cases.
+- AUC evaluates ranking ability rather than raw accuracy.
+- It is a standard metric in credit-risk modeling.
+
+ 
+ 
+
+::: {style="height: 2em;"}
+::: 
+### Logistic Regression  
+
+Logistic regression models the conditional probability of default via a linear decision boundary:
+
+\[
+P(Y = 1 \mid X = x) = \sigma(w^\top x + b), 
+\qquad 
+\sigma(z) = \frac{1}{1 + e^{-z}}.
+\]
+
+The optimisation problem is convex and is solved efficiently using **Iteratively Reweighted Least Squares (IRLS)**.
+
+Since logistic regression has **no major hyperparameters**, the main computational considerations involve:
+
+- ensuring predictors are **scaled**,  
+- avoiding **perfect separation**,  
+- using class probabilities for **ROC** computation.  
+
+ 
+
+### **Cross-validated performance**
+
+| Metric        | Value |
+|--|-|
+| **ROC**        | **0.722** |
+| Sensitivity   | 0.257 |
+| Specificity   | 0.971 |
+
+ 
+### **Test set performance**
+
+- **Accuracy: 0.807**  
+- **AUC: 0.7238**
+
+Logistic regression provides a strong, interpretable baseline but struggles to capture nonlinearities, reflected in its lower sensitivity.
+
+ 
+
+::: {style="height: 2em;"}
+:::
+### k-Nearest Neighbours (kNN)
+
+kNN classifies a new point by majority vote among its \( k \) closest neighbours:
+
+\[
+\hat{f}(x) = \frac{1}{k} \sum_{i \in N_k(x)} y_i .
+\]
+
+Because kNN is non-parametric, choosing \( k \) is the key computational optimisation.  
+Small \( k \) produces high variance; large \( k \) oversmooths.  
+Distance computations scale as \( O(n) \) per prediction, making **scaling of predictors essential**.
+
+
+
+### **Hyperparameter tuning (k)**  
+
+Cross-validation selected
+
+\[
+k = 21
+\]
+
+as the value maximising ROC.
+
+
+
+### **Cross-validated performance**
+
+| k  | ROC       | Sens  | Spec  |
+|----|-----------|-------|-------|
+| 21 | **0.742** | 0.946 | 0.345 |
+
+
+ 
+
+### **Test set performance**
+
+- **Accuracy: 0.812**  
+- **AUC: 0.7475**
+
+kNN adapts to local structure better than logistic regression, giving improved ROC but still limited by distance-based decision boundaries in high dimensions.
+
+ 
+
+
+::: {style="height: 2em;"}
+:::
+
+### Random Forest
+
+A Random Forest aggregates predictions from many decision trees built on bootstrap samples:
+
+\[
+\hat{f}(x) = \frac{1}{B} \sum_{b=1}^{B} T_b(x),
+\]
+
+where each tree uses a random subset of features at each split.  
+Tuning the number of candidate variables **mtry** controls the diversity–correlation trade-off.
+
+ 
+### **Hyperparameter tuning**
+
+Cross-validation selected:
+
+\[
+mtry = 4
+\]
+
+as the value yielding the highest ROC.
+
+ 
+
+### **Cross-validated performance**
+
+| mtry |   ROC     | Sens  | Spec  |
+|------|-----------|-------|-------|
+| 4    | **0.758** | 0.949 | 0.356 |
+
+
+ 
+### **Test set performance**
+
+- **Accuracy: 0.815**  
+- **AUC: 0.7678 (best)**
+
+Random Forest achieves the strongest performance, capturing nonlinear effects, interactions, and complex boundaries with relatively stable variance.
+
+ 
+
+::: {style="height: 2em;"}
+:::
+
+### Model Comparison
+
+| Model               | Test AUC | Notes                                   |
+|--------------------|----------|------------------------------------------|
+| Logistic Regression | 0.724    | Linear; weakest nonlinear fit            |
+| kNN                 | 0.748    | Better local adaptation                  |
+| **Random Forest**   | **0.768** | **Best overall; captures interactions**  |
+
+
+
+ 
+
+###  
+
+Across all three models, computational optimisation centred on selecting appropriate hyperparameters (k, mtry) and ensuring proper scaling and cross-validation. Random Forest delivered the best predictive performance, suggesting that nonlinear interactions are important drivers of credit default behaviour in this dataset.
+
+
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+library(caret)
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+ctrl
+
+```
+
+
+```{r,results='hide', message=FALSE, warning=FALSE }
+set.seed(123)
+
+log_model <- train(
+  default_payment_next_month ~ .,
+  data = train_df,
+  method = "glm",
+  family = "binomial",
+  metric = "ROC",
+  trControl = ctrl
+)
+
+log_model
+
+```
+
+```{r ,results='hide', message=FALSE, warning=FALSE }
+set.seed(123)
+
+# Tuning grid for kNN
+knn_grid <- expand.grid(k = seq(3, 21, by = 2))   # odd values from 3 to 21
+
+# Train kNN model
+knn_model <- train(
+  default_payment_next_month ~ .,
+  data = train_df,
+  method = "knn",
+  metric = "ROC",
+  tuneGrid = knn_grid,
+  trControl = ctrl
+)
+
+knn_model
+
+```
+
+ 
+
+
+```{r ,results='hide', message=FALSE, warning=FALSE }
+set.seed(123)
+
+# Random forest tuning grid
+rf_grid <- expand.grid(
+  mtry = c(2, 4, 6, 8, 10)   
+)
+
+rf_model <- train(
+  default_payment_next_month ~ .,
+  data = train_df,
+  method = "rf",
+  metric = "ROC",
+  tuneGrid = rf_grid,
+  trControl = ctrl,
+  ntree = 300    
+)
+
+rf_model
+
+```
+
+ 
+## Evaluation code
+```{r,results='hide', message=FALSE, warning=FALSE }
+library(caret)
+library(pROC)
+
+# Predicted probabilities and classes
+log_prob <- predict(log_model, test_df, type = "prob")[, "default"]
+log_pred <- predict(log_model, test_df)
+
+# Confusion matrix
+log_cm <- confusionMatrix(log_pred, test_df$default_payment_next_month, positive = "default")
+
+# AUC
+log_roc <- roc(test_df$default_payment_next_month, log_prob)
+
+log_cm
+log_roc$auc
+
+```
+
+```{r ,results='hide', message=FALSE, warning=FALSE}
+knn_prob <- predict(knn_model, test_df, type = "prob")[, "default"]
+knn_pred <- predict(knn_model, test_df)
+
+knn_cm <- confusionMatrix(knn_pred, test_df$default_payment_next_month, positive = "default")
+knn_roc <- roc(test_df$default_payment_next_month, knn_prob)
+
+knn_cm
+knn_roc$auc
+
+```
+
+ 
+
+```{r,results='hide', message=FALSE, warning=FALSE }
+rf_prob <- predict(rf_model, test_df, type = "prob")[, "default"]
+rf_pred <- predict(rf_model, test_df)
+
+rf_cm <- confusionMatrix(rf_pred, test_df$default_payment_next_month, positive = "default")
+rf_roc <- roc(test_df$default_payment_next_month, rf_prob)
+
+rf_cm
+rf_roc$auc
+
+```
+
+ 
+```{r,results='hide', message=FALSE, warning=FALSE }
+auc_results <- data.frame(
+  Model = c("Logistic Regression", "kNN", "Random Forest"),
+  Test_AUC = c(
+    log_roc$auc,
+    knn_roc$auc,
+    rf_roc$auc
+  
+  )
+)
+
+auc_results
+
+```
+
+```{r , results='hide', message=FALSE, warning=FALSE}
+library(pROC)
+
+  
+roc_log <- roc(test_df$default_payment_next_month, log_prob)
+roc_knn <- roc(test_df$default_payment_next_month, knn_prob)
+roc_rf  <- roc(test_df$default_payment_next_month, rf_prob)
+
+# Plot ROC curves
+plot(roc_log, col = "blue", lwd = 2, main = "ROC Curves for All Models")
+plot(roc_knn, col = "red", lwd = 2, add = TRUE)
+plot(roc_rf,  col = "forestgreen", lwd = 2, add = TRUE)
+
+legend("bottomright",
+       legend = c(
+         paste0("Logistic Regression (AUC = ", round(roc_log$auc, 3), ")"),
+         paste0("kNN (AUC = ", round(roc_knn$auc, 3), ")"),
+         paste0("Random Forest (AUC = ", round(roc_rf$auc, 3), ")")
+       ),
+       col = c("blue", "red", "forestgreen"),
+       lwd = 2
+)
+
+```
+
+
+::: {style="height: 7em;"}
+:::
+
+ 
+## Wheel 6 - 7: Regularisation and Refinement & Extrinsic Predictive Comparisons
+
+The goal of Wheel 6 is to **improve generalisation performance** by applying regularisation techniques and refining hyperparameters.
+
+Regularisation helps:
+
+- prevent overfitting  
+- improve robustness on unseen data  
+
+We refine three models:
+
+1. Ridge-regularised Logistic Regression  
+2. k-Nearest Neighbours  
+3. Random Forest  
+
+Performance is evaluated using **ROC-AUC**.
+
+ 
+
+### 1. Ridge-Regularised Logistic Regression
+
+Ridge adds an \(L_2\) penalty:
+
+\[
+\hat{\beta} = \arg\min_\beta \left[ -\ell(\beta) + \lambda \sum_{j=1}^p \beta_j^2 \right].
+\]
+
+This reduces variance and stabilises coefficients when predictors are correlated.
+
+#### Cross-validation results
+
+\[
+\lambda_{\text{min}} = 0.0370, \qquad 
+\lambda_{\text{1SE}} = 0.2169.
+\]
+
+- \(\lambda_{\min}\): highest AUC  
+- \(\lambda_{1SE}\): simpler model, slightly lower performance  
+
+#### Test set performance
+
+- **Accuracy:** 0.7985  
+- **AUC:** 0.7267  
+- **Sensitivity:** 0.1876  
+- **Specificity:** 0.9811  
+
+Interpretation: Ridge stabilises the model but sensitivity remains low due to linear boundaries.
+ 
+
+### 2. k-Nearest Neighbours Refinement
+
+Performance depends on selecting an appropriate \(k\).
+
+#### Cross-validation results
+
+| k   | ROC              |
+|-----|------------------|
+| 17  | 0.7438           |
+| 19  | 0.7473           |
+| 21  | 0.7475           |
+| 23  | 0.7493           |
+| **25** | **0.7500 (best)** |
+
+Selected value:
+
+\[
+k = 25.
+\]
+
+#### Test set performance
+
+- **Accuracy:** 0.8123  
+- **AUC:** 0.7475  
+- **Sensitivity:** 0.3526  
+- **Specificity:** 0.9497  
+
+Interpretation: Larger \(k\) improves stability and reduces variance.
+ 
+
+### 3. Random Forest — Hyperparameter Refinement
+
+RF regularisation controlled by **mtry**.
+
+#### Cross-validation tuning results
+
+| mtry |   ROC    |  Sens  |  Spec  |
+|------|----------|--------|--------|
+| 2    | 0.7556   | 0.9584 | 0.3208 |
+| **4** | **0.7593 (best)** | 0.9481 | 0.3556 |
+| 6    | 0.7569   | 0.9455 | 0.3615 |
+| 8    | 0.7573   | 0.9443 | 0.3631 |
+| 10   | 0.7548   | 0.9433 | 0.3625 |
+
+
+Selected:
+
+\[
+mtry = 4.
+\]
+
+#### Test set performance
+
+- **Accuracy:** 0.8159  
+- **AUC:** **0.7687 (highest overall)**  
+- **Sensitivity:** 0.3623  
+- **Specificity:** 0.9514  
+
+Interpretation: RF provides the strongest generalisation; controlled feature sampling limits overfitting.
+
+ 
+### Model Comparison After Regularisation
+
+| Model | Test AUC | Notes |
+|--||--|
+| Logistic Regression (Ridge) | 0.7267 | Linear; stable but weak detector |
+| kNN (k tuned) | 0.7475 | Better local adaptation |
+| **Random Forest (mtry tuned)** | **0.7687** | **Best overall; strongest nonlinear modelling** |
+
+
+
+
+
+```{r ,results='hide', message=FALSE, warning=FALSE }
+library(glmnet)
+
+# training matrices for glmnet
+x_train <- model.matrix(default_payment_next_month ~ ., data = train_df)[, -1]
+y_train <- as.numeric(train_df$default_payment_next_month == "default")
+
+# Prepare test matrices
+x_test  <- model.matrix(default_payment_next_month ~ ., data = test_df)[, -1]
+y_test  <- as.numeric(test_df$default_payment_next_month == "default")
+
+```
+
+```{r,results='hide', message=FALSE, warning=FALSE  }
+#Fit Ridge Logistic Regression
+set.seed(123)
+
+ridge_cv <- cv.glmnet(
+  x = x_train,
+  y = y_train,
+  alpha = 0,               
+  family = "binomial",
+  type.measure = "auc"
+)
+
+ridge_cv$lambda.min       # best lambda
+ridge_cv$lambda.1se       # simpler model
+
+```
+
+```{r, results='hide', message=FALSE, warning=FALSE }
+#Evaluate the ridge model
+ridge_prob <- predict(ridge_cv, newx = x_test, s = ridge_cv$lambda.min, type = "response")
+
+# Convert to predicted classes
+ridge_pred <- ifelse(ridge_prob > 0.5, 1, 0)
+
+# Confusion Matrix
+ridge_cm <- caret::confusionMatrix(
+  factor(ridge_pred, levels = c(0,1)),
+  factor(y_test, levels = c(0,1)),
+  positive = "1"
+)
+
+# AUC
+ridge_roc <- roc(y_test, as.numeric(ridge_prob))
+ridge_auc <- ridge_roc$auc
+
+ridge_cm
+ridge_auc
+
+```
+
+```{r, results='hide', message=FALSE, warning=FALSE  }
+ # knn small refinement
+
+set.seed(123)
+
+k_grid <- c(17, 19, 21, 23, 25)
+knn_results <- data.frame(k = k_grid, ROC = NA)
+
+for (i in seq_along(k_grid)) {
+  k_val <- k_grid[i]
+  
+  model <- train(
+    default_payment_next_month ~ .,
+    data = train_df,
+    method = "knn",
+    trControl = ctrl,
+    tuneGrid = data.frame(k = k_val)
+  )
+  
+  # predict probabilities for ROC
+  probs <- predict(model, test_df, type = "prob")[, "default"]
+  
+  knn_results$ROC[i] <- roc(test_df$default_payment_next_month, probs)$auc
+}
+
+knn_results
+
+```
+```{r, results='hide', message=FALSE, warning=FALSE }
+# RF refinement again
+library(randomForest)
+library(caret)
+library(pROC)
+
+set.seed(123)
+
+# Define the regularisation grid
+mtry_grid <- data.frame(mtry = c(2, 4, 6, 8, 10))
+
+# Train the random forest using the grid
+rf_reg_model <- train(
+  default_payment_next_month ~ .,
+  data = train_df,
+  method = "rf",
+  metric = "ROC",
+  trControl = ctrl,        
+  tuneGrid = mtry_grid
+)
+
+rf_reg_model
+
+```
+```{r }
+rf_prob6 <- predict(rf_reg_model, test_df, type = "prob")[, "default"]
+rf_pred6 <- predict(rf_reg_model, test_df)
+
+rf_cm6 <- confusionMatrix(
+  rf_pred6,
+  test_df$default_payment_next_month,
+  positive = "default"
+)
+
+rf_roc6 <- roc(test_df$default_payment_next_month, rf_prob6)
+
+rf_cm6
+rf_roc6$auc
+
+```
+::: {style="height: 7em;"}
+:::
+
+ 
+ 
+
+
+```{r}
+library(knitr)
+
+model_comparison <- data.frame(
+  Model       = c("Ridge Logistic Regression",
+                  "kNN (k = 25)",
+                  "Random Forest (mtry = 4)"),
+  Test_AUC    = c(0.7267, 0.7475, 0.7687),
+  Accuracy    = c(0.7985, 0.8123, 0.8159),
+  Sensitivity = c(0.1877, 0.3526, 0.3623),
+  Specificity = c(0.9811, 0.9497, 0.9514)
+)
+
+kable(model_comparison, digits = 4,
+      caption = "Test-set performance of the tuned models.")
+
+```
+```{r}
+library(ggplot2)
+
+auc_df <- data.frame(
+  Model = c("Ridge", "kNN", "Random Forest"),
+  AUC   = c(0.7267, 0.7475, 0.7687)
+)
+
+ggplot(auc_df, aes(x = Model, y = AUC, fill = Model)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = round(AUC, 3)), vjust = -0.5) +
+  ylim(0, 0.85) +
+  theme_minimal() +
+  ggtitle("Test AUC Comparison Across Models")
+
+```
+
+
+
+
+## Wheel 8: Statistical Inference and Theoretical Justification
+
+This wheel interprets the models developed in Wheels 5 and 6 and connects  to statistics
+
+We focus on:
+
+1. **Coefficient interpretation under regularisation (Ridge Logistic Regression)**
+2. **Nonparametric variable importance (Random Forest)**
+ 
+
+
+
+## 1. Ridge Logistic Regression — Coefficient Interpretation
+
+Ridge regression estimates the logistic model:
+
+\[
+\Pr(Y = 1 \mid X = x) = \sigma(\beta_0 + x^\top\beta)
+\]
+
+but applies an \(L_2\) penalty:
+
+\[
+\beta_\lambda = \arg\min_\beta \left[ -\ell(\beta) + \lambda \|\beta\|_2^2 \right].
+\]
+
+This reduce the coefficients toward zero, reducing variance and stabilising estimation when predictors are correlated.
+
+
+
+### Estimated coefficients (\(\lambda = \lambda_{\min}\))
+
+ 
+
+#### Key patterns from your Ridge output:
+| Variable | Coefficient | Interpretation |
+|----------|-------------|----------------|
+| **PAY_0** | **+0.563** | Strongest positive drive of defaults. |
+| **PAY_AMT2, PAY_AMT3, PAY_AMT4, PAY_AMT5, PAY_AMT6** | Negative | Larger past payments reduce default probability. |
+| **BILL_AMT1** | Negative | Higher bill values reduce predicted default slightly. |
+| **LIMIT_BAL** | Small negative | Clients with larger credit limits are slightly less likely to default. |
+| **AGE** | Very small positive | Weak effect. |
+| **EDUCATION / MARRIAGE** | Small magnitude | Socio-demographic effects exist but small. |
+
+
+
+
+::: {style="height: 3em;"}
+:::
+
+## Random Forest — Variable Importance
+
+Random Forest does not give coefficients, but it measures predictive contribution via **MeanDecreaseGini**.
+
+ 
+### **Most influential variables (highest Gini importance)**
+
+1. **PAY_0** ($\approx$ 856) — *single strongest predictor*
+2. **BILL_AMT1** ($\approx$ 710)
+3. **AGE** ($\approx$ 596)
+4. **LIMIT_BAL** ($\approx$ 539)
+5. **PAY_AMT1–6** ($\approx$ 498–575)
+
+These confirm what we observed in Ridge:
+
+- **Repayment history dominates predictive power.**
+- **Past payment amounts matter significantly.**
+- **Demographic variables (SEX, EDUCATION, MARRIAGE) have very small importance.**
+
+### **Importance Plot Interpretation**
+
+The variable importance plot shows a steep drop after the repayment and bill features.
+
+
+
+## Theoretical Model Comparison
+
+| Model                     | Bias      | Variance       | Interpretability | Notes                                                        |
+|---------------------------|-----------|----------------|------------------|--------------------------------------------------------------|
+| **Ridge Logistic Regression** | High bias | Low variance   | High             | Best when relationship is close to linear; stable coefficients. |
+| **kNN**                   | Low bias  | High variance  | Low              | Sensitive to scaling; performance improved with larger *k*.  |
+| **Random Forest**         | Low bias  | Medium variance| Moderate         | Best performance; captures complex nonlinear patterns.       |
+
+### **Why Random Forest performs best**
+
+RF is theoretically suited for datasets with:
+
+- nonlinear interactions  
+- categorical + continuous predictors  
+- complex repayment patterns  
+
+RF reduces variance through bagging and randomness, explaining why it achieved the **highest AUC (0.7687)**.
+
+### **Why Ridge is still valuable**
+
+Even though Ridge has lower AUC:
+
+- It provides **interpretable coefficients**, which is critical in finance/regulation.
+- It approximates the log-odds surface smoothly → lower risk of overfitting.
+
+
+ 
+
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+# logistic regression coefficients
+ridge_coefs <- coef(ridge_cv, s = ridge_cv$lambda.min)
+ridge_coefs
+
+```
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+# random forest importance
+rf_importance <- importance(rf_reg_model$finalModel)
+rf_importance
+
+```
+
+```{r}
+varImpPlot(rf_reg_model$finalModel, main = "Random Forest Variable Importance")
+
+```
+
+
+## Wheel 9: Deployment and Practical Scalability
+
+This wheel is how the final statistical learning system can be **mainstreamed** in  financial environments.
+
+The focus moves from model accuracy to **computational efficiency**, **scalability**, and **real world integration**.
+
+The goal is to show that the selected model can be reliable and deployed to support **credit-risk assessment at scale**.
+
+
+
+## Model Selected for Deploying
+
+Based on the predictive performance (Wheel 7), the **Random Forest (mtry = 4)** is selected for deployment.
+
+**Reasons:**
+
+- Highest Test AUC = **0.7687**, beating Logistic Regression and kNN.  
+- Provides **balanced sensitivity (0.362)** and **specificity (0.951)**.  
+- Captures **nonlinear relationships** and interactions between limits, bill amounts, and repayment history.  
+- Random Forests are **stable, robust to noise**, and just minimal hyperparameter tuning.  
+
+Thus, Random Forest is the most reliable and scalable model for estimating default risk.
+
+
+
+## Computational Efficiency and Scalability
+
+
+For a dataset with:
+
+- ~26,741 observations  
+- 16 predictors  
+- 300 trees  
+
+Random Forest has complexity:
+
+\[
+O(B \cdot n \log n),
+\]
+
+where \(B\) is the number of trees.
+
+Training  can be done  on a normal laptop, enabling **weekly or monthly retraining**.
+
+  
+
+### **Large-Scale Deployment**
+
+Random Forests scale well because:
+
+- Trees are **parallelisable** across CPU cores  
+- Model size is **small (~3–6 MB)**  
+- Prediction cost scales **linearly** with dataset size  
+
+Batch scoring **1 million customers** is feasible within minutes.
+
+Thus, RF supports both **high-frequency scoring** and **large customer databases**.
+
+
+
+## Deployment Architectures
+
+ 
+
+### **A. Real-Time API Scoring**
+
+Could be used for instant credit decisions.
+
+**Architecture:**
+
+1. REST API receives applicant data  
+2. Data is validated + transformed  
+3. Random Forest returns  
+   \[
+   P(\text{default} = 1)
+   \]  
+4. Decision engine approves/denies based on probability thresholds  
+
+
+Real-time scoring enhances customer experience while meeting regulatory needs.
+
+
+
+## Memory, Storage, and Infrastructure Requirements
+
+### **Model Footprint**
+
+- Fits easily in RAM on cloud or on-prem servers  
+
+### **Compute Environment**
+
+Deployment ways are on:
+
+- **Cloud (AWS, Azure, GCP)**  
+- **On-prem banking servers**   
+
+### **Parallelisation**
+
+RF predictions can be parallelised on:
+
+- CPU cores  
+- Spark / MLlib clusters  
+- Docker + Kubernetes deployments  
+
+Scalability is **not** a limitation for this model.
+
+
+
+## Monitoring, Maintenance, and Drift Detection
+
+### **A. Performance Monitoring**
+
+Track over time:
+
+- AUC  
+- Sensitivity, specificity  
+- PSI (Population Stability Index)  
+- Calibration drift  
+
+### **B. Data Drift Detection**
+
+Identify changes in:
+
+- Customer repayment behaviour  
+- Macroeconomic indicators  
+- Demographics  
+
+Detected drift triggers **retraining**.
+
+### **C. Retraining Schedule**
+
+Common policies:
+
+- Retrain every **3–6 months**  
+- Retrain if **PSI > 0.25**  
+- Retrain if AUC drops below threshold  
+
+Banks require **auditability**, so ALL model versions must be logged.
+
+
+
+## Ethical, Fairness, and Regulatory Considerations
+
+Credit-risk models influence people’s financial opportunities, fairness is essential.
+
+### **A. Protected Attributes**
+
+Variables like:
+
+- SEX  
+- EDUCATION  
+- MARRIAGE  
+
+may view as socioeconomic inequality.
+
+Monitoring must check for:
+
+- Uneven false-positive rates  
+- Threshold discrimination  
+
+
+
+### **B. Transparency & Interpretability**
+
+Random Forest can be explained via:
+
+- Variable importance  
+
+
+
+### **C. Regulatory Compliance**
+
+Financial institutions must meet:
+
+- Basel II/III governance  
+- Documentation of assumptions  
+- Traceability of predictions  
+- back-testing  
+
+Wheel 9 confirms the model meets practical and regulatory standards.
+
+
+
+ 
+
+Random Forest (mtry = 4) is **fully deployable** because:
+
+- Best predictive accuracy  
+- Works in both batch + real-time pipelines  
+- Scales to large datasets  
+- Stable, interpretable, regulation-friendly  
+- Can be retrained responsively  
+
+The model is ready for integration into a production-level credit-risk management system.
+
+
+::: {style="height: 5em;"}
+:::
+
+
+# Task 2 - Digit Recognition
+
+## Data Preparation
+
+We will begin by preparing the data for both training and testing. The MNIST dataset is to be loaded and filter it to retain only the digits '1' and '7'. This will allow us to focus on a binary classification problem.
+
+```{r load_data}
+ 
+library(dslabs)
+
+# Load dataset
+mnist <- read_mnist()
+
+set.seed(19671210)
+
+# Filter for digits '1' and '7'
+idx_train <- which(mnist$train$labels %in% c(1, 7))
+idx_test <- which(mnist$test$labels %in% c(1, 7))
+
+# Prepare training and test data
+xtrain <- mnist$train$images[idx_train, ]
+ytrain <- as.factor(mnist$train$labels[idx_train])
+xtest <- mnist$test$images[idx_test, ]
+ytest <- as.factor(mnist$test$labels[idx_test])
+
+#  dimensions
+n_train <- nrow(xtrain)
+n_test <- nrow(xtest)
+p <- ncol(xtrain)
+
+ 
+n_train
+n_test
+p
+
+```
+
+### Data info
+
+-   **Training data**: 13,007 samples.
+-   **Test data**: 2,163 samples.
+
+Each image is represented by 784 features (dimension) .
+
+This prepares us for the next step.
+
+::: {style="height: 5em;"}
+:::
+
+
+## Model Training
+
+```{r knn_train , echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(class)
+
+# Train k = 1 (1NN)
+knn_1NN <- knn(train = xtrain, test = xtest, cl = ytrain, k = 1)
+
+# Train  k = 27 (27NN)
+knn_27NN <- knn(train = xtrain, test = xtest, cl = ytrain, k = 27)
+
+# predicted class
+knn_1NN
+knn_27NN
+
+```
+
+Trained two kNN classifiers
+
+1.  **1NN (k=1)**: Classifies based on the nearest neighbor.
+2.  **27NN (k=27)**: Classifies based on the majority of 27 nearest neighbors.
+
+-   **kNN models** were trained using `xtrain` (features) and `ytrain` (labels), and tested on `xtest` (test features).
+
+-   The predicted labels (either `1` or `7`) were generated for each test sample.
+
+    ::: {style="height: 5em;"}
+    :::
+
+### Performance Matrices
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library(caret)
+library(ggplot2)
+
+# CM  for 1NN 
+conf_matrix_1NN <- confusionMatrix(knn_1NN, ytest)
+
+# CM  for 27NN 
+conf_matrix_27NN <- confusionMatrix(knn_27NN, ytest)
+
+
+print("K=1") 
+conf_matrix_1NN
+
+print("K=27")
+conf_matrix_27NN
+
+```
+
+### 1NN (k = 1) Model:
+
+-   **Accuracy**: 0.9926  
+-   **Confusion Matrix**:
+    -   True Positives (1's): 1135 (Predicted correctly as 1)
+    -   False Positives (7's predicted as 1): 16
+    -   False Negatives (1's predicted as 7): 0
+    -   True Negatives (7's): 1012
+-   **Key Metrics**:
+    -   **Sensitivity** (Recall ): 1.0000\
+    -   **Specificity**: 0.9844  
+    -   **Balanced Accuracy**: 0.9922 
+
+
+
+### 27NN (k = 27) Model:
+
+-   **Accuracy**: 0.9847 (Still very good, slightly lower than 1NN)
+-   **Confusion Matrix**:
+    -   True Positives (1's): 1135 (Predicted correctly as 1)
+    -   False Positives (7's predicted as 1): 33
+    -   False Negatives (1's predicted as 7): 0
+    -   True Negatives (7's): 995
+-   **Key Metrics**:
+    -   **Sensitivity** (Recall for class 1): 1.0000\
+    -   **Specificity**: 0.9679\
+    -   **Balanced Accuracy**: 0.9839  
+
+
+
+### Insights:
+
+-   **1NN** outperforms **27NN** in terms of **accuracy** (0.9926 vs. 0.9847) and **balanced accuracy** (0.9922 vs. 0.9839).
+
+-   Both models have **perfect sensitivity** (1.0000) for class 1, meaning they identify all true positives for class 1.
+
+-   **27NN** has a slightly lower **specificity** for class 7 compared to 1NN, indicating it makes a few more false positive predictions for class 7.
+
+    ::: {style="height: 5em;"}
+    :::
+
+## ROC Curve Analysis
+
+```{r, message=FALSE, warning=FALSE}
+ library(pROC)
+
+# 1NN ROC curve 
+roc_1NN <- roc(ytest, as.numeric(knn_1NN))
+
+# 27NN ROC curve 
+roc_27NN <- roc(ytest, as.numeric(knn_27NN))
+
+# Plot  
+plot(roc_1NN, col = "blue", main = "ROC Curves for kNN Models")
+plot(roc_27NN, col = "red", add = TRUE)
+
+# AUC on both models
+auc_1NN <- auc(roc_1NN)
+auc_27NN <- auc(roc_27NN)
+
+#   AUC values
+auc_1NN
+auc_27NN
+
+```
+
+We compared the performance of **1NN (k=1)** and **27NN (k=27)** using **ROC curves** and **AUC values**.
+
+### For ROC Curves
+
+Both models performed similarly, with sharp rises, indicating good separation between the classes. The **1NN (k=1)** curve is slightly higher than the **27NN (k=27)** curve suggesting a better performance.
+
+### AUC:
+
+-   **1NN (k=1)**: 0.9922
+-   **27NN (k=27)**: 0.9839
+
+The **1NN (k=1)** model has a higher AUC, indicating it performs better in distinguishing between the two classes. However, both models gives excellent performance with AUC values close to 1.5
+
+## Error Visualization
+
+```{r, message=FALSE, warning=FALSE}
+# FP label 
+fp_indices <- which(ytest == "7" & knn_1NN == "1")
+
+# FN label 
+fn_indices <- which(ytest == "1" & knn_1NN == "7")
+
+# first  of each error  
+fp_index <- if (length(fp_indices) > 0) fp_indices[1] else NULL
+fn_index <- if (length(fn_indices) > 0) fn_indices[1] else NULL
+
+cat(" Error Indices Found \n")
+cat("False Positive (True 7, Pred 1) Test Index: ", fp_index, "\n")
+cat("False Negative (True 1, Pred 7) Test Index: ", fn_index, "\n")
+
+# Plot 
+plot_digit <- function(features, true_label, predicted_label, type) {
+  img_matrix <- matrix(features, nrow = 28, byrow = FALSE)
+  image(t(apply(img_matrix, 2, rev)), col = grey.colors(255), 
+        main = paste(type, " | True:", true_label, " | Pred:", predicted_label))
+}
+
+# Plot FP
+if (!is.null(fp_index)) {
+    plot_digit(xtest[fp_index, ], ytest[fp_index], knn_1NN[fp_index], "FALSE POSITIVE")
+}
+
+# Plot FN
+if (!is.null(fn_index)) {
+    plot_digit(xtest[fn_index, ], ytest[fn_index], knn_1NN[fn_index], "FALSE NEGATIVE")
+}
+
+```
+
+We were to identify one FP and one FN from the test predictions of the better performing model (1NN).
+
+### False Positive (FP)
+
+-   **True label**: ‘7’, **Predicted label**: ‘1’.
+-   The model incorrectly said ‘1’ for a ‘7’ image. This could happen due to **visual similarities** in the shapes of the digits, especially when ‘7’ is written in a certain style that resembles ‘1’.
+
+### False Negative (FN)
+
+-   **True label**: ‘1’, **Predicted label**: ‘7’.
+-   In this situation, for the '7' class we never had FN; we even refer to our confusion matrix it confirms that.
+
+::: {style="height: 5em;"}
+:::
+
+
+# Exercise 3 - Discovering the concept of ultra high dimensionality
+### DNA dataset
+```{r, results='hide', message=FALSE,warning=FALSE}
+library(mlbench)
+
+data(DNA)
+
+str(DNA)
+
+# Dim
+n <- nrow(DNA)
+p <- ncol(DNA) -  
+
+n; p
+
+head(DNA)
+
+```
+
+ 
+
+```{r,results='hide', message=FALSE,warning=FALSE}
+n <- nrow(DNA)
+p <- ncol(DNA) - 1
+kappa <- n / p
+kappa
+
+summary_table <- data.frame(
+  Dataset = "DNA",
+  Sample_Size_n = n,
+  Predictors_p = p,
+  Kappa = round(kappa, 3),
+  Type_Homogeneity = "Binary factors (0/1)",
+  Scale_Homogeneity = "Yes"
+)
+
+summary_table
+
+```
+
+### Structure 
+ 
+- **n = 3186 observations**  
+- **p = 180 predictor variables (V1-V180)**  
+- **1 target variable (Class)**
+
+All predictors are **binary factors** (“0”, “1”), indicating **type-homogeneity**.
+
+
+####  Scale-Homogeneity
+All variables use the same 0/1 scale → no normalization required.
+
+
+
+### 2. The K-index  
+
+\[
+\kappa = \frac{3186}{180} \approx 17.7
+\]
+
+###  Interpretation
+- K $\gg$ 1 → low-dimensional 
+- Overfitting risk is low  
+
+::: {style="height: 5em;"}
+:::
+
+## Graphical Insights
+
+```{r,results='hide', message=FALSE,warning=FALSE}
+set.seed(123)
+
+# 9 random predictor vars  
+vars9 <- sample(colnames(DNA)[1:180], 9)
+
+vars9
+
+```
+
+```{r}
+par(mfrow = c(3,3))
+
+for (v in vars9) {
+    tab <- table(DNA[[v]])
+    barplot(tab,
+            main = paste("Distribution of", v),
+            col = c("steelblue", "tomato"),
+            names.arg = c("0", "1"),
+            ylab = "Frequency")
+}
+
+```
+
+
+DNA predictors, nine variables 
+(**V159, V179, V14, V170, V50, V118, V43, V178, V175**) were sampled at random and plotted as barplots.  
+Since all predictors are **binary factors**, each plot shows the frequency of 0s and 1s.
+
+ 
+
+- **Clear sparsity**  
+  For most variables, one category (0 or 1) dominates. 
+  
+- **Strong imbalance across variables**  
+
+- **No continuous structure or outliers**  
+
+ 
+## Correlation and Multicollinearity Analysis (DNA Dataset)
+
+```{r,results='hide', message=FALSE,warning=FALSE}
+#  correlation
+dna_numeric <- as.data.frame(lapply(DNA[ , vars9], function(x) as.numeric(as.character(x))))
+
+cor_matrix <- cor(dna_numeric)
+cor_matrix
+
+```
+
+
+Multicollinearity, correlations were computed for the nine randomly selected predictors;
+**V159, V179, V14, V170, V50, V118, V43, V178, V175**  
+ 
+ 
+### 1. Extremely low correlations across predictors
+ 
+### 2. Absence of multicollinearity
+ 
+ 
+::: {style="height: 9em;"}
+::: 
+
+### BreastCancer dataset
+
+```{r,results='hide', message=FALSE,warning=FALSE}
+library(mlbench)
+data(BreastCancer)
+
+str(BreastCancer)
+head(BreastCancer)
+
+n_bc <- nrow(BreastCancer)
+p_bc <- ncol(BreastCancer) - 1    
+
+n_bc; p_bc
+
+```
+
+##  Structure 
+
+The BreastCancer dataset has
+
+- **n = 699 observations**  
+- **p = 10 predictor variables** (Cl.thickness, Cell.size, Cell.shape, …, Mitoses)  
+- **1 target variable** (`Class`, with levels *benign* and *malignant*)
+
+Most predictors are **ordinal factors** taking values 1–10.  
+Except:
+
+- `Bare.nuclei` is a factor also coded 1–10  
+- `Id` is a non-predictive identifier and excluded from analysis
+
+###  Type-Homogeneity
+The dataset is therefore **almost type-homogeneous**, except for:
+
+- `Id` (non-numeric identifier)  
+- a mix of ordered vs unordered factors
+
+###  Scale-Homogeneity
+All predictors take values in **{1, 2, …, 10}**, giving a **shared measurement scale**.
+
+
+###   K-index  
+
+\[
+\kappa = \frac{n}{p} = \frac{699}{10} = 69.9.
+\]
+
+###  Interpretation
+K-value  **low-dimensional** dataset.
+
+ 
+- **very low overfitting risk**  
+- Statistical models are numerically stable without heavy regularization  
+
+
+
+```{r}
+# Road to plot
+vars9_bc <- colnames(BreastCancer)[2:10]    
+vars9_bc
+
+par(mfrow = c(3,3))
+
+for (v in vars9_bc) {
+    tab <- table(BreastCancer[[v]])
+    barplot(tab,
+            main = paste("Distribution of", v),
+            col = "steelblue",
+            ylab = "Frequency")
+}
+
+```
+ 
+
+## Graphical Insights (BreastCancer)
+BreastCancer predictors barplots were plotted for nine ordinal variables 
+**Cl.thickness, Cell.size, Cell.shape, Marg.adhesion, Epith.c.size, Bare.nuclei, Bl.cromatin, Normal.nucleoli, Mitoses**.
+
+ 
+
+### 1. Strong right-skewness in all predictors
+ 
+
+### 2. Low representation of high-severity categories
+ 
+
+Overall, the BreastCancer dataset show **highly skewed ordinal predictors**: dominated by low values.  
+
+::: {style="height: 3em;"}
+:::
+
+## Correlation & Multicollinearity (BreastCancer Dataset)
+```{r,results='hide', message=FALSE,warning=FALSE}
+# corr
+bc_numeric <- BreastCancer[ , vars9_bc]
+
+bc_numeric <- as.data.frame(lapply(bc_numeric, function(x) as.numeric(as.character(x))))
+
+cor_bc <- cor(bc_numeric, use = "pairwise.complete.obs")
+cor_bc
+
+```
+
+
+
+A correlation matrix is computed after converting the ordinal cytology scores to numeric values.  
+
+ 
+#### 1. Strong positive correlations across many predictors
+ 
+notably,
+
+- **Cell.size $\leftrightarrow$ Cell.shape** ($\approx$ 0.97)  
+- **Cell.size $\leftrightarrow$ Marg.adhesion** ($\approx$ 0.76)  
+- **Cell.shape $\leftrightarrow$ Normal.nucleoli** ($\approx$ 0.72)  
+- **Bare.nuclei $\leftrightarrow$ Bl.cromatin** ($\approx$ 0.68)
+
+ 
+
+
+
+### 2. Evidence of multicollinearity
+Many predictors share correlations above **0.70**, indicating moderate to strong multicollinearity.
+
+
+::: {style="height: 3em;"}
+:::
+
+### Spam dataset
+```{r,results='hide', message=FALSE,warning=FALSE}
+spam <- read.csv("spam-classification-1.csv")
+
+str(spam)
+head(spam)
+
+n_spam <- nrow(spam)
+p_spam <- ncol(spam) - 1   # assume last column is target
+n_spam; p_spam
+
+```
+
+## Structure of the Data
+
+The spam dataset contains
+
+- **n = 4601 emails**  
+- **p = 57 predictor variables** (all quantitative features)  
+- **1 target variable** (`type`, with levels *spam* and *non-spam*)
+
+The predictors mostly are **word frequencies**, **symbol frequencies**, and **summary statistics** of text content, including:
+
+- frequencies of specific words (e.g., *money, free, order, address*)  
+- frequencies of punctuation symbols (“!”, “$”, “#”, …)  
+- measures of capital letter usage (`capitalTotal`, `capitalLong`, `capitalAve`)
+
+###  Type-Homogeneity
+All predictors are **continuous numeric features**,   
+Thus, the dataset is **type-homogeneous**.
+
+###  Scale-Homogeneity
+Most variables lie on small percentage scales (0–5%), but some variables such as `capitalTotal` can take very large integer values.
+ 
+
+- the dataset is **not scale-homogeneous**  
+- normalization or standardization is important  
+
+
+
+### K-index 
+
+\[
+\kappa = \frac{n}{p} = \frac{4601}{57} \approx 80.7.
+\]
+
+###  Interpretation
+A K-value above **80** show a **very well-conditioned dataset**, with many more observations than predictors.
+ 
+- low risk of overfitting  
+ 
+::: {style="height: 6em;"}
+::: 
+ 
+## Graphical Insights
+```{r}
+set.seed(123)
+vars9_spam <- sample(colnames(spam)[1:57], 9)
+vars9_spam
+
+```
+
+ 
+```{r}
+par(mfrow = c(3,3))
+
+for (v in vars9_spam) {
+    hist(spam[[v]],
+         main = paste("Distribution of", v),
+         xlab = v,
+         col = "steelblue",
+         border = "white")
+}
+
+```
+
+## Graphical insights
+To explore the distribution of the predictors   
+**num650, project, internet, re, capitalLong, business, order, free, font**.
+
+ 
+
+### Extreme right-skewness across all variables
+Most predictors have very high mass near zero with long right tails.  
+- many words appear **rarely** in most emails  
+ 
+###  Presence of rare but extreme values
+
+ 
+Overall, these histograms confirm that the Spam dataset contains **continuous, highly skewed, heavy-tailed predictors**, which is typical for natural-language word-frequency features.
+
+::: {style="height: 6em;"}
+::: 
+ 
+```{r,results='hide', message=FALSE,warning=FALSE}
+spam_numeric <- spam[ , vars9_spam]  
+
+cor_spam <- cor(spam_numeric, use = "pairwise.complete.obs")
+cor_spam
+
+```
+
+## Correlation & Multicollinearity (Spam Dataset)
+
+### Extremely weak linear correlations across predictors
+ 
+\[
+-0.10 < r < 0.10,
+\]
+
+This indicates that the predictors behave **nearly independently**.
+
+- the presence of one word rarely determines the presence of another  
+- many words occur sparsely and irregularly  
+- spammers vary vocabulary to avoid detection  
+
+
+
+###  No evidence of multicollinearity
+ 
+
+
+::: {style="height: 9em;"}
+::: 
+
+### Leukemia dataset
+ 
+```{r,results='hide', message=FALSE,warning=FALSE}
+leukemia <- read.csv("leukemia-data-1.csv")
+str(leukemia)
+head(leukemia)
+
+n_leuk <- nrow(leukemia)
+p_leuk <- ncol(leukemia) - 1    
+n_leuk; p_leuk
+
+
+```
+
+## Structure of Leukemia Data
+
+The leukemia dataset contains
+
+- **n = 72 samples**  
+- **p = 3571 predictor variables** (gene expression levels)  
+- **1 response variable** (`Y`, indicating leukemia subtype)
+
+Each predictor corresponds to a gene expression intensity.  
+
+- continuous numeric features  
+- biologically similar (expression of different genes)  
+- measured on comparable normalized scales   
+
+Thus, the dataset is **type-homogeneous** and largely **scale-homogeneous**.
+ 
+
+
+
+## 2. The K-index 
+
+\[
+\kappa = \frac{n}{p} = \frac{72}{3571} \approx 0.020.
+\]
+
+###  Interpretation
+The K-value is **close to zero**, 
+
+- the dataset is **ultra-high dimensional**  
+- classical estimation methods fail because \(p \gg n\)  
+- overfitting occurs unless strong regularization is applied  
+- the design matrix is singular (non-invertible)  
+- visualization becomes hard without dimensionality reduction  
+ 
+
+
+ 
+the leukemia dataset is challenging because \( p \gg n \):
+
+- noise can be mistaken for signal  
+- multicollinearity is guaranteed  
+- large-scale computations (e.g., correlation matrix) become unstable  
+- **feature selection is essential to do**  
+
+::: {style="height: 6em;"}
+::: 
+ 
+ 
+ 
+
+## Graphical Insights
+```{r}
+set.seed(123)
+vars9_leuk <- sample(colnames(leukemia)[-1], 9)      
+vars9_leuk
+
+
+
+par(mfrow = c(3,3))
+
+for (v in vars9_leuk) {
+    hist(leukemia[[v]],
+         main = paste("Distribution of", v),
+         xlab = v,
+         col = "steelblue",
+         border = "white")
+}
+
+
+```
+ 
+
+Histograms were generated for nine randomly selected genes,  
+**x.2463, x.2511, x.2227, x.526, x.195, x.2986, x.1842, x.1142, x.3371**.
+
+These  highlights key characteristics of ultra-high-dimensional data.
+
+
+
+### Continuous, some unimodal distributions, some skewed with varying shapes
+These patterns reflect natural biological variability across patient samples.
+
+
+- some genes (e.g., **x.2227**, **x.195**) span narrow ranges  
+- others (e.g., **x.2986**) exhibit extreme values  
+
+ 
+ 
+This visualization show how  datasets like this are considered **ultra-high dimensional and analytically challenging**.
+
+
+::: {style="height: 6em;"}
+::: 
+
+```{r,results='hide', message=FALSE,warning=FALSE}
+leuk_numeric <- leukemia[ , vars9_leuk]
+cor_leuk <- cor(leuk_numeric)
+cor_leuk
+
+```
+## Correlation & Multicollinearity (Leukemia Dataset)
+
+ 
+
+### Moderate correlations already appear in a random subset
+ 
+\[
+|r| \approx 0.20 - 0.40,
+\]
+
+e.g.:
+
+- **x.195 vs x.2463** ($\approx$ –0.41)  
+- **x.1142 vs x.195** ($\approx$ –0.21)  
+- **x.2986 vs x.2511** ($\approx$ 0.37)
+
+Even though these are random these **genes often co-express due to shared pathways**.
+
+
+ 
+### Correlation structure is noisy  
+ 
+ 
+
+::: {style="height: 7em;"}
+::: 
+
+## Prostate dataset
+```{r,results='hide', message=FALSE,warning=FALSE}
+prostate <- read.csv("prostate-cancer-1.csv")
+str(prostate)
+head(prostate)
+
+n_pros <- nrow(prostate)
+p_pros <- ncol(prostate) - 1   
+n_pros; p_pros
+
+
+```
+
+## Structure of the Prostate Data
+ 
+
+- **n = 79 samples**
+- **p = 500 predictor variables**, each an expression level of a gene transcript  
+  (e.g., `X206212_at`, `X207075_at`, ...)
+- **1 response variable (`Y`)**, indicating class membership
+
+Predictors are,
+- continuous numeric gene-expression measurements  
+ 
+ 
+
+The dataset is **type-homogeneous** and   **scale-homogeneous**.
+
+
+
+## The K-index 
+
+\[
+\kappa = \frac{n}{p} = \frac{79}{500} \approx 0.158.
+\]
+
+###  Interpretation
+- K is indicating a **high-dimensional dataset**.  
+- The number of predictors (500)   exceeds the number of samples (79).
+
+
+- overfitting is likely
+- feature selection or dimensionality reduction is essential  
+- correlation estimates are noisy due to the small sample size  
+
+::: {style="height: 7em;"}
+::: 
+
+## Graphical Insights
+
+```{r}
+set.seed(123)
+vars9_pros <- sample(colnames(prostate)[-1], 9)   
+vars9_pros
+
+par(mfrow = c(3,3))
+
+for (v in vars9_pros) {
+    hist(prostate[[v]],
+         main = paste("Distribution of", v),
+         xlab = v,
+         col = "steelblue",
+         border = "white")
+}
+
+
+```
+ 
+Histograms were generated for nine randomly selected genes (`X220094_s_at`, `X213054_at`, `X209764_x_at`, `X207287_at`, `X209812_x_at`, `X214503_x_at`, `X207373_at`, `X218230_at`, `X217758_s_at`).   
+
+### Continuous measurements with modest spread
+Most genes show expression values clustered around a narrow central region
+Some appear symmetric, others show mild left or right skew, and a few display light tails or small outlier regions.  
+ 
+::: {style="height: 3em;"}
+::: 
+## Correlation and Multicollinearity (Prostate data)
+```{r,results='hide', message=FALSE,warning=FALSE}
+pros_numeric <- prostate[ , vars9_pros]
+cor_pros <- cor(pros_numeric)
+cor_pros
+
+```
+
+ 
+### Strong positive correlations among many gene pairs
+
+several have
+\[
+|r| \approx 0.70 - 0.98,
+\]
+
+ 
+
+- `X213054_at`  $\leftrightarrow$  `X207373_at`  ($\approx$ 0.94)  
+- `X209812_x_at`  $\leftrightarrow$  `X214503_x_at`  ($\approx$ 0.97)  
+- `X209764_x_at`  $\leftrightarrow$  `X207287_at`  ($\approx$ 0.75)  
+- `X213054_at`  $\leftrightarrow$  `X209812_x_at`  ($\approx$ 0.93)
+
+These very high values indicate **strong co-expression**, which is expected because genes involved in similar biological pathways tend to be jointly activated.
+
+
+ 
+- gene expression data is naturally redundant,
+
+we conclude that **multicollinearity is severe**.
+
+
+
+::: {style="height: 9em;"}
+::: 
+
+### Colon Cancer dataset
+
+```{r,results='hide', message=FALSE,warning=FALSE}
+colon <- read.csv("colon-cancer-1.csv")
+str(colon)
+head(colon)
+
+n_col <- nrow(colon)
+p_col <- ncol(colon) - 1
+n_col; p_col
+
+```
+
+ 
+
+### Structure of the Colon cancer Data
+
+ 
+
+- **n = 62 samples**
+- **p = 2000 predictor variables**, each corresponding to a measured gene expression level (`X1, X2, …, X2000`)
+- **1 response variable**, `colon.y`, indicating class membership (tumor vs. normal)
+
+ 
+
+- continuous numeric values  
+- type-homogeneous and roughly scale-homogeneous  
+
+
+
+### The K-index
+
+\[
+\kappa = \frac{n}{p} = \frac{62}{2000} = 0.031.
+\]
+
+####  Interpretation
+
+This is  **ultra-high-dimensional**
+
+
+ 
+
+::: {style="height: 7em;"}
+::: 
+
+## Graphical Insights
+```{r}
+set.seed(123)
+vars9_colon <- sample(colnames(colon)[-1], 9)   
+vars9_colon
+
+par(mfrow = c(3,3))
+
+for (v in vars9_colon) {
+    hist(colon[[v]],
+         main = paste("Distribution of", v),
+         xlab = v,
+         col = "steelblue",
+         border = "white")
+}
+
+```
+
+Histograms were generated for nine randomly selected genes (`X415`, `X463`, `X179`, `X526`, `X195`, `X938`, `X1842`, `X1142`, `X1323`).  
+ 
+
+
+ 
+Each gene shows a continuous distribution, often spanning narrow ranges (e.g., around $-$2 to +2).  
+
+
+### Heterogeneous distributional shapes
+- some appear approximately symmetric  
+- some are skewed left or right  
+- some show multiple small modes  
+   
+
+
+
+
+::: {style="height: 6em;"}
+::: 
+## Correlation & Multicollinearity (colon cancer Dataset)
+```{r,results='hide', message=FALSE,warning=FALSE}
+colon_numeric <- colon[ , vars9_colon]
+cor_colon <- cor(colon_numeric)
+cor_colon
+
+```
+ 
+###  Mostly correlations |r| < 0.30
+ 
+- `X415` with `X463` : **0.095**
+- `X179` with `X526` : **–0.108**
+- `X195` with `X1842` : **0.172**
+ 
+
+
+
+### few moderate correlations appear (0.30–0.55)
+ 
+ 
+
+- `X526` with `X938` : **0.527**  
+- `X415` with `X526` : **0.457**
+- `X195` with `X938` : **0.394**
+- `X1842` with `X938` : **0.494**
+
+ 
+
+
+### Based on what rendered No evidence of multicollinearity
+ 
+- No correlations exceed **0.7**
+ 
+
+ 
+
+::: {style="height: 5em;"}
+:::
+## Last task
+### Q1. \(E[Y \mid X]\)
+
+Conditional density of \(Y | X=x\)
+
+\[
+p_{Y\mid X}(y \mid x)
+= \frac{1}{\sqrt{\dfrac{18}{\pi}}}
+\exp\!\left(
+-\frac{\pi^{2}}{18}
+\left[
+y - \frac{\pi}{2}x - \frac{3\pi}{4}\cos\!\left(\frac{\pi}{2}(1+x)\right)
+\right]^{2}
+\right), 
+\qquad -\infty < y < \infty .
+\]
+
+We can see the form in the exponential above
+
+\[
+-\frac{\pi^{2}}{18}\big(y - \mu(x)\big)^{2}
+\quad\text{with}\quad
+\mu(x) = \frac{\pi}{2}x + \frac{3\pi}{4}\cos\!\left(\frac{\pi}{2}(1+x)\right).
+\]
+
+
+univariate normal density  
+
+\[
+\phi(y;\mu,\sigma^{2})
+=
+\frac{1}{\sqrt{2\pi\sigma^{2}}}
+\exp\!\left(
+-\frac{(y-\mu)^{2}}{2\sigma^{2}}
+\right).
+\]
+
+Comparing this with our conditional density exponent wise
+
+\[
+-\frac{\pi^{2}}{18}\big(y-\mu(x)\big)^{2}
+\quad\text{vs}\quad
+-\frac{(y-\mu(x))^{2}}{2\sigma^{2}} .
+\]
+
+ 
+
+\[
+\frac{1}{2\sigma^{2}}
+=
+\frac{\pi^{2}}{18}
+\quad\Longrightarrow\quad
+\sigma^{2}
+=
+\frac{9}{\pi^{2}}.
+\]
+
+Thus
+\[
+Y \mid X = x \sim \mathcal N\!\left(\mu(x),\,\frac{9}{\pi^{2}}\right),
+\qquad
+\mu(x) = \frac{\pi}{2}x + \frac{3\pi}{4}\cos\!\left(\frac{\pi}{2}(1+x)\right).
+\]
+
+ 
+For a normal random variable,
+\[
+Y \mid X = x \sim \mathcal N\big(\mu(x),\sigma^{2}\big)
+\quad\Rightarrow\quad
+E[Y \mid X = x] = \mu(x).
+\]
+
+ 
+\[
+\boxed{
+E[Y \mid X = x]
+=
+\frac{\pi}{2}x
++
+\frac{3\pi}{4}\cos\!\left(\frac{\pi}{2}(1+x)\right)
+}.
+\]
+
+or
+
+\[
+\boxed{
+E[Y \mid X]
+=
+\frac{\pi}{2}X
++
+\frac{3\pi}{4}\cos\!\left(\frac{\pi}{2}(1+X)\right)
+}.
+\]
+
+::: {style="height: 3em;"}
+::: 
+
+### Q2
+ 
+\[
+p_X(x) = \frac{1}{2\pi}, \qquad 0 \le x < 2\pi.
+\]
+
+ 
+
+\[
+X \sim \mathrm{Uniform}(0, 2\pi).
+\]
+
+sampling \(X_1, \dots, X_n\).
+
+ 
+From Q1, 
+
+\[
+Y \mid X=x \sim \mathcal N\!\left(
+\mu(x),\ \frac{9}{\pi^2}
+\right),
+\]
+ 
+\[
+\mu(x)
+=
+\frac{\pi}{2}x
++
+\frac{3\pi}{4}
+\cos\!\left( \frac{\pi}{2}(1+x) \right).
+\]
+ 
+
+\[
+Y = \mu(X) + \epsilon, 
+\qquad 
+\epsilon \sim \mathcal N\!\left(0,\frac{9}{\pi^{2}}\right),
+\]
+
+
+now
+\[
+\{(X_i,Y_i)\}_{i=1}^{n}, \qquad n = 99,
+\]
+
+---
+
+
+```{r}
+set.seed(2025)
+n <- 99
+
+# Generate uniform
+X <- runif(n, min = 0, max = 2*pi)
+
+# mu(x)
+mu <- function(x){
+  (pi/2)*x + (3*pi/4)*cos( (pi/2)*(1 + x) )
+}
+
+#  variance of Y|X
+sigma2 <- 9 / (pi^2)
+
+# epsilon 
+epsilon <- rnorm(n, mean = 0, sd = sqrt(sigma2))
+
+# Y = mu(X) + eps
+Y <- mu(X) + epsilon
+
+sim_data <- data.frame(X = X, Y = Y)
+
+head(sim_data)
+```
+
+
+::: {style="height: 3em;"}
+::: 
+
+### Q3
+```{r}
+library(ggplot2)
+
+# True reg fx
+mu <- function(x){
+  (pi/2)*x + (3*pi/4)*cos( (pi/2)*(1 + x) )
+}
+
+# True curve
+xgrid <- seq(0, 2*pi, length.out = 400)
+true_curve <- mu(xgrid)
+curve_df <- data.frame(x = xgrid, y = true_curve)
+
+# Plot  
+ggplot() +
+  geom_point(data = sim_data,
+             aes(x = X, y = Y, color = "Simulated Data"),
+             alpha = 0.7, size = 2) +
+  geom_line(data = curve_df,
+            aes(x = x, y = y, color = "True Regression Function"),
+            linewidth = 1.2) +
+  scale_color_manual(values = c("Simulated Data" = "steelblue",
+                                "True Regression Function" = "red")) +
+  labs(
+    title = "Scatterplot of Data with True Regression Function",
+    x = "X",
+    y = "Y",
+    color = ""  
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+
+::: {style="height: 8em;"}
+::: 
+
+### Q4
+
+### (a) 
+
+The squared error loss
+\[
+\ell(Y,f(X)) = (Y - f(X))^{2},
+\]
+with  risk 
+\[
+R(f) = \mathbb{E}\big[(Y - f(X))^{2}\big].
+\]
+
+Bayes optimal regression function
+\[
+f^{\ast}(X) = \arg\min_{f} R(f)
+            = \arg\min_{f} \mathbb{E}\big[(Y - f(X))^{2}\big].
+\]
+
+To get \(f^{\ast}\), fix \(x\) and consider the conditional risk
+\[
+R_x(t) = \mathbb{E}\big[(Y - t)^{2} \mid X = x\big],
+\]
+\(t\) is a real number representing the value \(f(x)\).  
+\[
+R_x(t) = \mathbb{E}\big[Y^{2} \mid X=x\big]
+         - 2t\,\mathbb{E}\big[Y \mid X=x\big]
+         + t^{2}.
+\]
+
+Differentiating wrt \(t\)  
+\[
+\frac{\partial R_x(t)}{\partial t}
+= -2\,\mathbb{E}\big[Y \mid X=x\big] + 2t
+= 0
+\quad\Longrightarrow\quad
+t = \mathbb{E}\big[Y \mid X=x\big].
+\]
+
+The minimizer 
+\[
+f^{\ast}(x) = \mathbb{E}[Y \mid X=x].
+\]
+
+From Q1–Q2 
+\[
+Y \mid X=x \sim \mathcal N\!\left(
+\mu(x), \frac{9}{\pi^{2}}
+\right),
+\qquad
+\mu(x)
+=
+\frac{\pi}{2}x
++
+\frac{3\pi}{4}
+\cos\!\left(\frac{\pi}{2}(1+x)\right),
+\]
+ 
+ 
+\[
+\mathbb{E}[Y \mid X=x] = \mu(x).
+\]
+
+Therefore, 
+\[
+\boxed{
+f^{\ast}(x)
+=
+\frac{\pi}{2}x
++
+\frac{3\pi}{4}
+\cos\!\left(\frac{\pi}{2}(1+x)\right)
+}.
+\]
+
+::: {style="height: 3em;"}
+::: 
+
+### (b)
+ 
+The squared error loss
+\[
+\ell(Y,f(X)) = (Y - f(X))^{2},
+\]
+risk of a predictor \(f\) 
+\[
+R(f) = \mathbb{E}\big[(Y - f(X))^{2}\big].
+\]
+
+From   (a),  
+\[
+f^{\ast}(x) = \mathbb{E}[Y \mid X = x].
+\]
+The  **Bayes risk** is
+\[
+R^{\ast} = R(f^{\ast}) = \mathbb{E}\big[(Y - f^{\ast}(X))^{2}\big].
+\]
+
+From the standard decomposition
+\[
+\mathbb{E}\big[(Y - f(X))^{2}\big]
+=
+\mathbb{E}\Big[ \operatorname{Var}(Y \mid X) \Big]
++
+\mathbb{E}\Big[ \big(\mathbb{E}[Y \mid X] - f(X)\big)^{2} \Big].
+\]
+Which shows that the minimum possible risk is obtained when \(f(X) = \mathbb{E}[Y \mid X]\), and that
+\[
+R^{\ast} = \mathbb{E}\Big[ \operatorname{Var}(Y \mid X) \Big].
+\]
+
+In the model 
+\[
+Y \mid X = x \sim \mathcal N\!\left( \mu(x), \frac{9}{\pi^{2}} \right),
+\]
+so that for every \(x\),
+\[
+\operatorname{Var}(Y \mid X = x) = \frac{9}{\pi^{2}}.
+\]
+simply
+\[
+\mathbb{E}\big[\operatorname{Var}(Y \mid X)\big]
+=
+\mathbb{E}\left[\frac{9}{\pi^{2}}\right]
+=
+\frac{9}{\pi^{2}}.
+\]
+
+So the Bayes risk is
+\[
+\boxed{
+R^{\ast} = \frac{9}{\pi^{2}} \approx 0.912
+}.
+\]
+ 
+::: {style="height: 3em;"}
+::: 
+
+### (c)
+
+```{r}
+library(FNN)     
+library(rpart)   
+library(ggplot2)
+library(reshape2)
+
+set.seed(2025)
+
+ 
+S <- 100
+n <- nrow(sim_data)
+
+# Store test errors 
+errors <- matrix(NA, nrow = S, ncol = 4)
+colnames(errors) <- c("kNN", "Linear", "Poly", "Tree")
+
+#  k for kNN and degree 
+k_value <- 5
+poly_degree <- 3
+
+for (s in 1:S) {
+
+  # Random 60/40 split
+  train_idx <- sample(1:n, size = floor(0.6 * n))
+  train <- sim_data[train_idx, ]
+  test  <- sim_data[-train_idx, ]
+
+  # Extract X and Y separately  
+  train_X <- matrix(train$X, ncol = 1)
+  test_X  <- matrix(test$X,  ncol = 1)
+  train_Y <- train$Y
+  
+ 
+  # kNN Regression
+ 
+  knn_pred <- knn.reg(train = train_X, 
+                      test = test_X, 
+                      y = train_Y,
+                      k = k_value)$pred
+  
+  errors[s, "kNN"] <- mean((test$Y - knn_pred)^2)
+  
+ 
+  # Linear Regression
+ 
+  lin_model <- lm(Y ~ X, data = train)
+  lin_pred <- predict(lin_model, newdata = test)
+  
+  errors[s, "Linear"] <- mean((test$Y - lin_pred)^2)
+  
+ 
+  #  Polynomial Regression
+ 
+  poly_formula <- as.formula(
+    paste("Y ~", paste(paste0("poly(X,", poly_degree, ")"), collapse = ""))
+  )
+  
+  poly_model <- lm(Y ~ poly(X, poly_degree, raw = TRUE), data = train)
+  poly_pred <- predict(poly_model, newdata = test)
+  
+  errors[s, "Poly"] <- mean((test$Y - poly_pred)^2)
+  
+ 
+  # 5. Regression Tree 
+ 
+  tree_model <- rpart(Y ~ X, data = train, method = "anova")
+  tree_pred <- predict(tree_model, newdata = test)
+  
+  errors[s, "Tree"] <- mean((test$Y - tree_pred)^2)
+}
+
+ 
+errors_df <- data.frame(errors)
+errors_long <- melt(errors_df, variable.name = "Model", value.name = "Test_MSE")
+
+ 
+#  Boxplot 
+ 
+ggplot(errors_long, aes(x = Model, y = Test_MSE, fill = Model)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Comparative Boxplots of Test MSEs (100 replications)",
+    x = "Model",
+    y = "Test MSE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+```
+
+::: {style="height: 3em;"}
+::: 
+
+### (d)
+
+From (b) we had the Bayes risk
+\[
+R^{\ast} = \frac{9}{\pi^{2}} \approx 0.912,
+\]
+which is the minimum expected squared prediction error for this
+regression problem.
+
+the boxplots in (c) summarizes the test MSEs over 100
+replications for the four learning machines. 
+
+- **kNN regression** has the **lowest average test error**, with a median test MSE
+  around \(1.4\).  This is the closest to \(R^{\ast}\), only slightly above the
+  theoretical optimum.  The  nonparametric nature of kNN allows it to adapt
+    well to the nonlinear  true regression function
+  \(f^{\ast}(x)\).
+
+- The **regression tree** shows an average test error around \(1.8\text{–}2.0\),
+  clearly higher than kNN and further from \(R^{\ast}\).  Trees can capture
+  nonlinearity, but their piecewise  structure cannot fully follow the
+  smooth oscillations of \(f^{\ast}\), leading to additional bias.
+
+- **Polynomial regression** (degree 3) has an average test error around \(3\),
+    above \(R^{\ast}\).  A low degree global polynomial cannot
+  reproduce the cosine component of the true function, so it suffers from
+  considerable model misspecification bias despite being more flexible than a straight line.
+
+- **Linear regression** performs the worst, with an average test error around
+  \(4\text{–}4.5\), the furthest from \(R^{\ast}\).  The strong nonlinearity in
+  the true regression function means that a linear model is heavily biased and
+  cannot approximate \(f^{\ast}\) well.
+
+ 
+ For a video summary, click here:  
+[YouTube Summary Video](https://youtu.be/7jR8PZ4wd2g)
+
+
+
+
+
+
+
+
+
+
